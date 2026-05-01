@@ -1,0 +1,48 @@
+# Python
+__pycache__/
+*.py[cod]
+*.pyo
+*.pyd
+.Python
+*.egg-info/
+*.egg
+dist/
+build/
+wheels/
+
+# Virtual environments
+.venv/
+venv/
+env/
+.env
+
+# PyPI / packaging
+.pypirc
+*.whl
+*.tar.gz
+
+# Agent runs
+runs/
+*.ndjson
+*.lock
+
+# Local agent/tool state
+.claude/
+.claude.json*
+.ace-tool/
+.codex/
+.cursor/
+.gemini/
+
+# IDE
+.vscode/
+.idea/
+*.suo
+*.user
+
+# OS
+.DS_Store
+Thumbs.db
+
+# Hatch
+.hatch/
