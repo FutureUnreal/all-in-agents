@@ -1,7 +1,7 @@
 [English](README.md) | [中文](README_zh.md)
 
 <p align="center">
-  <h1 align="center">all-in-agent</h1>
+  <h1 align="center">all-in-agents</h1>
 </p>
 
 <p align="center">
@@ -9,20 +9,20 @@
 </p>
 
 <p align="center">
-  <a href="https://pypi.org/project/all-in-agent/"><img src="https://img.shields.io/pypi/v/all-in-agent" alt="PyPI version"></a>
-  <a href="https://pypi.org/project/all-in-agent/"><img src="https://img.shields.io/pypi/pyversions/all-in-agent" alt="Python versions"></a>
-  <a href="https://pypi.org/project/all-in-agent/"><img src="https://img.shields.io/pypi/l/all-in-agent" alt="License"></a>
-  <a href="https://github.com/FutureUnreal/all-in-agent"><img src="https://img.shields.io/github/stars/FutureUnreal/all-in-agent?style=flat" alt="GitHub Stars"></a>
+  <a href="https://pypi.org/project/all-in-agents/"><img src="https://img.shields.io/pypi/v/all-in-agents" alt="PyPI version"></a>
+  <a href="https://pypi.org/project/all-in-agents/"><img src="https://img.shields.io/pypi/pyversions/all-in-agents" alt="Python versions"></a>
+  <a href="https://pypi.org/project/all-in-agents/"><img src="https://img.shields.io/pypi/l/all-in-agents" alt="License"></a>
+  <a href="https://github.com/FutureUnreal/all-in-agents"><img src="https://img.shields.io/github/stars/FutureUnreal/all-in-agents?style=flat" alt="GitHub Stars"></a>
 </p>
 
 ```bash
-pip install all-in-agent
-pip install "all-in-agent[openai]"      # OpenAI GPT
-pip install "all-in-agent[anthropic]"   # Anthropic Claude
-pip install "all-in-agent[all]"         # 安装所有可选依赖
+pip install all-in-agents
+pip install "all-in-agents[openai]"      # OpenAI GPT
+pip install "all-in-agents[anthropic]"   # Anthropic Claude
+pip install "all-in-agents[all]"         # 安装所有可选依赖
 ```
 
-## 为什么选择 all-in-agent
+## 为什么选择 all-in-agents
 
 - 🪶 **零依赖** — 纯标准库核心；适配器按需安装
 - 🔌 **全面可插拔** — 随意替换 LLM 适配器、工具、历史记录或编排方式，互不影响
@@ -32,7 +32,7 @@ pip install "all-in-agent[all]"         # 安装所有可选依赖
 ## 快速开始
 
 ```bash
-pip install "all-in-agent[openai]"      # 或 [anthropic]
+pip install "all-in-agents[openai]"      # 或 [anthropic]
 ```
 
 ```python
@@ -167,8 +167,8 @@ await bus.send(MessageEnvelope(
 
 | 适配器 | 安装额外依赖 | 环境变量 |
 |--------|-------------|---------|
-| `OpenAIAdapter`    | `all-in-agent[openai]`    | `OPENAI_API_KEY`    |
-| `AnthropicAdapter` | `all-in-agent[anthropic]` | `ANTHROPIC_API_KEY` |
+| `OpenAIAdapter`    | `all-in-agents[openai]`    | `OPENAI_API_KEY`    |
+| `AnthropicAdapter` | `all-in-agents[anthropic]` | `ANTHROPIC_API_KEY` |
 
 两个适配器均支持在瞬时错误时以指数退避加抖动方式自动重试。
 
@@ -209,10 +209,10 @@ all_in_agents/
 
 ## 包名说明
 
-PyPI 包名为 `all-in-agent`，但 Python import 名为 `all_in_agents`：
+PyPI 包名为 `all-in-agents`，但 Python import 名为 `all_in_agents`：
 
 ```bash
-pip install all-in-agent
+pip install all-in-agents
 ```
 
 ```python

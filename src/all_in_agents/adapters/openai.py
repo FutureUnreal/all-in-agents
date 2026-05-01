@@ -44,7 +44,7 @@ class OpenAIAdapter(LLMAdapter):
         try:
             import openai as _openai
         except ImportError:
-            raise ImportError("Install openai: pip install 'all-in-agent[openai]'")
+            raise ImportError("Install openai: pip install 'all-in-agents[openai]'")
 
         if not self.model_id:
             raise ConfigError("OpenAIAdapter requires an explicit model; e.g. OpenAIAdapter(model='gpt-4o')")

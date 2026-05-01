@@ -1,7 +1,7 @@
 [English](README.md) | [中文](README_zh.md)
 
 <p align="center">
-  <h1 align="center">all-in-agent</h1>
+  <h1 align="center">all-in-agents</h1>
 </p>
 
 <p align="center">
@@ -9,20 +9,20 @@
 </p>
 
 <p align="center">
-  <a href="https://pypi.org/project/all-in-agent/"><img src="https://img.shields.io/pypi/v/all-in-agent" alt="PyPI version"></a>
-  <a href="https://pypi.org/project/all-in-agent/"><img src="https://img.shields.io/pypi/pyversions/all-in-agent" alt="Python versions"></a>
-  <a href="https://pypi.org/project/all-in-agent/"><img src="https://img.shields.io/pypi/l/all-in-agent" alt="License"></a>
-  <a href="https://github.com/FutureUnreal/all-in-agent"><img src="https://img.shields.io/github/stars/FutureUnreal/all-in-agent?style=flat" alt="GitHub Stars"></a>
+  <a href="https://pypi.org/project/all-in-agents/"><img src="https://img.shields.io/pypi/v/all-in-agents" alt="PyPI version"></a>
+  <a href="https://pypi.org/project/all-in-agents/"><img src="https://img.shields.io/pypi/pyversions/all-in-agents" alt="Python versions"></a>
+  <a href="https://pypi.org/project/all-in-agents/"><img src="https://img.shields.io/pypi/l/all-in-agents" alt="License"></a>
+  <a href="https://github.com/FutureUnreal/all-in-agents"><img src="https://img.shields.io/github/stars/FutureUnreal/all-in-agents?style=flat" alt="GitHub Stars"></a>
 </p>
 
 ```bash
-pip install all-in-agent
-pip install "all-in-agent[openai]"      # OpenAI GPT
-pip install "all-in-agent[anthropic]"   # Anthropic Claude
-pip install "all-in-agent[all]"         # all optional deps
+pip install all-in-agents
+pip install "all-in-agents[openai]"      # OpenAI GPT
+pip install "all-in-agents[anthropic]"   # Anthropic Claude
+pip install "all-in-agents[all]"         # all optional deps
 ```
 
-## Why all-in-agent
+## Why all-in-agents
 
 - 🪶 **Zero dependencies** — pure stdlib core; adapters are opt-in extras
 - 🔌 **Pluggable everything** — swap LLM adapter, tools, history, or orchestration without touching other parts
@@ -32,7 +32,7 @@ pip install "all-in-agent[all]"         # all optional deps
 ## Quick Start
 
 ```bash
-pip install "all-in-agent[openai]"      # or [anthropic]
+pip install "all-in-agents[openai]"      # or [anthropic]
 ```
 
 ```python
@@ -187,8 +187,8 @@ await bus.send(MessageEnvelope(
 
 | Adapter | Install extra | Environment variable |
 |---------|--------------|---------------------|
-| `OpenAIAdapter`    | `all-in-agent[openai]`    | `OPENAI_API_KEY`    |
-| `AnthropicAdapter` | `all-in-agent[anthropic]` | `ANTHROPIC_API_KEY` |
+| `OpenAIAdapter`    | `all-in-agents[openai]`    | `OPENAI_API_KEY`    |
+| `AnthropicAdapter` | `all-in-agents[anthropic]` | `ANTHROPIC_API_KEY` |
 
 Both adapters classify errors (TRANSIENT, RATE_LIMITED, AUTH, INVALID_REQUEST, INTERNAL) and retry with exponential backoff. Rate-limited requests honor `retry-after` headers when available.
 
@@ -234,10 +234,10 @@ all_in_agents/
 
 ## Package Naming
 
-The PyPI package is `all-in-agent`, but the Python import name is `all_in_agents`:
+The PyPI package is `all-in-agents`, but the Python import name is `all_in_agents`:
 
 ```bash
-pip install all-in-agent
+pip install all-in-agents
 ```
 
 ```python

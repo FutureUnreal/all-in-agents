@@ -44,7 +44,7 @@ class AnthropicAdapter(LLMAdapter):
         try:
             import anthropic
         except ImportError:
-            raise ImportError("Install anthropic: pip install 'all-in-agent[anthropic]'")
+            raise ImportError("Install anthropic: pip install 'all-in-agents[anthropic]'")
 
         api_key = self._api_key or os.environ.get("ANTHROPIC_API_KEY")
         if not api_key:

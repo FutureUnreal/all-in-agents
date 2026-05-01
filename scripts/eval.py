@@ -208,7 +208,7 @@ def assert_case(case: dict, shared: dict, events: list[dict]) -> list[str]:
 # ---------------------------------------------------------------------------
 
 async def main_async(argv=None) -> int:
-    parser = argparse.ArgumentParser(description="Offline eval harness for all-in-agent")
+    parser = argparse.ArgumentParser(description="Offline eval harness for all-in-agents")
     parser.add_argument("cases", nargs="+", metavar="CASE_JSON", help="Path(s) to case JSON files")
     args = parser.parse_args(argv)
 
