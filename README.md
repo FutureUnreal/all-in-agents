@@ -143,6 +143,45 @@ registry.register(Tool(
 
 `DANGEROUS` and `WRITES_LOCAL` tools call `approval_callback` before executing. By default, the callback denies all requests (safe by default). Use `unsafe_defaults()` for development or provide your own callback. Install `jsonschema` for automatic argument validation with type coercion.
 
+### Skills
+
+Project skills are prompt bundles stored as `SKILL.md` files:
+
+```
+skills/
+  reviewer/
+    SKILL.md
+.skills/
+  local-debug/
+    SKILL.md
+```
+
+Load selected skills by name:
+
+```python
+agent = Agent.quick(
+    model="gpt-4o",
+    workspace=".",
+    skills=["reviewer"],
+)
+```
+
+Or load every discovered skill:
+
+```python
+agent = Agent.quick(model="gpt-4o", workspace=".", skills="all")
+```
+
+CLI usage:
+
+```bash
+python -m all_in_agents --skill reviewer "Review this code"
+python -m all_in_agents --all-skills "Use the relevant project skill"
+python -m all_in_agents --project-context "Follow AGENTS.md and project context"
+```
+
+Hidden `.skills/` entries take precedence over `skills/` entries with the same name. Skills are injected into the system prompt; they do not automatically register Python tools.
+
 ### History & Compression
 
 `HistoryManager` compresses conversation history when it exceeds 70% of the model's context window (configurable via `compress_threshold_tokens`). It keeps the 12 most recent turns and the 3 most recent tool results verbatim, then asks the LLM to summarize everything older into structured JSON (facts / decisions / open_threads). If LLM summarization fails, it falls back to deterministic snipping.

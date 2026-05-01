@@ -23,6 +23,9 @@ def _build_parser() -> argparse.ArgumentParser:
     p.add_argument("--workspace", "-w", default=".", help="Workspace root directory")
     p.add_argument("--unsafe", action="store_true", help="Permissive mode: approve all tool calls")
     p.add_argument("--system", "-s", default="", help="System prompt")
+    p.add_argument("--project-context", action="store_true", help="Inject AGENTS.md and .context/ into the system prompt")
+    p.add_argument("--skill", action="append", default=None, help="Inject a project skill by name; can be repeated")
+    p.add_argument("--all-skills", action="store_true", help="Inject all discovered project skills")
     return p
 
 
@@ -56,8 +59,11 @@ async def _repl(agent) -> None:
 def main(argv: list[str] | None = None) -> int:
     parser = _build_parser()
     args = parser.parse_args(argv)
+    if args.skill and args.all_skills:
+        parser.error("--skill and --all-skills cannot be used together")
 
     model = args.model or _default_model(args.adapter)
+    skills = "all" if args.all_skills else args.skill
 
     from .agents.base import Agent
     agent = Agent.quick(
@@ -66,6 +72,8 @@ def main(argv: list[str] | None = None) -> int:
         workspace=args.workspace,
         unsafe=args.unsafe,
         system=args.system,
+        skills=skills,
+        inject_project_context=args.project_context,
     )
 
     if args.goal:

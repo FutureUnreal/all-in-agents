@@ -6,7 +6,11 @@ from .tools.registry import unsafe_defaults
 from .tools.coerce import coerce_args
 from .history import HistoryManager, FileEventStore
 from .history.compactor import HistoryCompactor, CompactionResult
-from .agents import Agent, ReActNode, LLMCallNode, ToolDispatchNode, MessageBus, TaskManager, MessageEnvelope, Task, TaskStatus
+from .agents import (
+    Agent, ReActNode, LLMCallNode, ToolDispatchNode,
+    SkillContext, discover_skills, load_skills, load_project_context, build_system_prompt,
+    MessageBus, TaskManager, MessageEnvelope, Task, TaskStatus,
+)
 
 __all__ = [
     # Core
@@ -22,5 +26,6 @@ __all__ = [
     "HistoryManager", "FileEventStore", "HistoryCompactor", "CompactionResult",
     # Agents
     "Agent", "ReActNode", "LLMCallNode", "ToolDispatchNode",
+    "SkillContext", "discover_skills", "load_skills", "load_project_context", "build_system_prompt",
     "MessageBus", "TaskManager", "MessageEnvelope", "Task", "TaskStatus",
 ]

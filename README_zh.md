@@ -123,6 +123,45 @@ registry.register(Tool(
 
 `DANGEROUS` 级别的工具在执行前会调用 `approval_callback`。安装 `jsonschema` 可启用自动参数校验。
 
+### Skills
+
+项目 skill 是放在 `SKILL.md` 中的提示词包：
+
+```
+skills/
+  reviewer/
+    SKILL.md
+.skills/
+  local-debug/
+    SKILL.md
+```
+
+按名称加载指定 skill：
+
+```python
+agent = Agent.quick(
+    model="gpt-4o",
+    workspace=".",
+    skills=["reviewer"],
+)
+```
+
+加载所有发现的 skill：
+
+```python
+agent = Agent.quick(model="gpt-4o", workspace=".", skills="all")
+```
+
+CLI 用法：
+
+```bash
+python -m all_in_agents --skill reviewer "Review this code"
+python -m all_in_agents --all-skills "Use the relevant project skill"
+python -m all_in_agents --project-context "Follow AGENTS.md and project context"
+```
+
+同名 skill 同时存在时，隐藏目录 `.skills/` 优先于 `skills/`。Skills 会注入 system prompt，但不会自动注册 Python 工具。
+
 ### 历史记录 & 压缩
 
 `HistoryManager` 在对话历史超过 `COMPRESS_THRESHOLD_TOKENS`（14,000 个 token）时进行压缩。它保留最近 12 轮对话和最近 3 条工具结果的原始内容，然后让 LLM 将更早的内容摘要为结构化 JSON（facts / decisions / open_threads）。

@@ -4,7 +4,7 @@ import asyncio
 import copy
 import hashlib
 import json
-from typing import TYPE_CHECKING, Callable, Awaitable, Any
+from typing import TYPE_CHECKING, Callable, Awaitable, Any, Iterable
 
 from ..core.flow import Flow
 from ..core.node import BaseNode
@@ -25,6 +25,16 @@ def _tool_sig(name: str, args: dict) -> str:
     payload = json.dumps(args, ensure_ascii=False, sort_keys=True, separators=(",", ":"))
     h = hashlib.sha256(payload.encode()).hexdigest()[:16]
     return f"{name}:{h}"
+
+
+def _normalize_skill_selection(skills: Iterable[str] | str | None) -> tuple[bool, tuple[str, ...] | None]:
+    if skills is None:
+        return False, None
+    if isinstance(skills, str):
+        if skills == "all":
+            return True, None
+        return False, (skills,)
+    return False, tuple(skills)
 
 
 # Deprecated: use LLMCallNode + ToolDispatchNode
@@ -280,6 +290,7 @@ class Agent:
         workspace_root: str | None = None,
         inject_project_context: bool = False,
         project_root: str | None = None,
+        skills: Iterable[str] | str | None = None,
         redact_tool_result: Callable[[str, Any], Any] | None = None,
         tool_max_concurrency: int = 4,
     ):
@@ -295,6 +306,7 @@ class Agent:
         self._workspace_root = workspace_root
         self._inject_project_context = inject_project_context
         self._project_root = project_root
+        self._skills = skills
         self._redact_tool_result = redact_tool_result
         self._tool_max_concurrency = tool_max_concurrency
         self._flow = Flow()
@@ -317,6 +329,8 @@ class Agent:
         tools: str = "builtin",
         workspace: str = ".",
         system: str = "",
+        skills: Iterable[str] | str | None = None,
+        inject_project_context: bool = False,
         unsafe: bool = False,
         budget: Budget | None = None,
         **kwargs: Any,
@@ -329,6 +343,8 @@ class Agent:
             tools: "builtin" to register all built-in tools, or "none".
             workspace: Workspace root directory for file tools.
             system: System prompt.
+            skills: Skill name, iterable of skill names, or "all".
+            inject_project_context: Load AGENTS.md and .context/ into the system prompt.
             unsafe: If True, use permissive approval (approve all tools).
             budget: Optional budget override.
         """
@@ -355,13 +371,23 @@ class Agent:
             budget=budget,
             system=system,
             workspace_root=workspace,
+            project_root=workspace,
+            skills=skills,
+            inject_project_context=inject_project_context,
             **kwargs,
         )
 
     async def run(self, goal: str) -> RunResult:
         system = self._system
-        if self._inject_project_context:
-            system = build_system_prompt(system, self._project_root or ".")
+        if self._inject_project_context or self._skills is not None:
+            include_all_skills, skill_names = _normalize_skill_selection(self._skills)
+            system = build_system_prompt(
+                system,
+                self._project_root or self._workspace_root or ".",
+                include_project_context=self._inject_project_context,
+                include_skills=include_all_skills,
+                skill_names=skill_names,
+            )
 
         run = Run(
             run_id=_make_ulid(), goal=goal, budget=self._budget,
