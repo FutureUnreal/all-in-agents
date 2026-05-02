@@ -8,7 +8,8 @@ from typing import TYPE_CHECKING, Callable, Awaitable, Any, Iterable
 
 from ..core.flow import Flow
 from ..core.node import BaseNode
-from ..core.run import BudgetExceededError, Budget, LoopDetectedError, Run, RunResult
+from ..core.artifacts import ArtifactContract
+from ..core.run import BudgetExceededError, Budget, LoopDetectedError, Run, RunResult, RunStatus, StopReason
 from ..history.manager import HistoryManager
 from ..history.store import FileEventStore
 from ..tools.policy import ToolPolicy
@@ -286,6 +287,7 @@ class Agent:
         tool_policy: ToolPolicy | None = None,
         history_compactor: CompactionStrategy | None = None,
         history_compress_threshold_tokens: int = -1,
+        artifact_contract: ArtifactContract | None = None,
         on_tool_result: Callable[[dict], Any] | None = None,
         on_event: Callable[[dict], Any] | None = None,
         workspace_root: str | None = None,
@@ -303,6 +305,7 @@ class Agent:
         self._tool_policy = tool_policy
         self._history_compactor = history_compactor
         self._history_compress_threshold_tokens = history_compress_threshold_tokens
+        self._artifact_contract = artifact_contract
         self._on_tool_result = on_tool_result
         self._on_event = on_event
         self._workspace_root = workspace_root
@@ -337,6 +340,7 @@ class Agent:
         budget: Budget | None = None,
         history_compactor: CompactionStrategy | None = None,
         history_compress_threshold_tokens: int = -1,
+        artifact_contract: ArtifactContract | None = None,
         **kwargs: Any,
     ) -> "Agent":
         """One-line Agent factory for quick setup.
@@ -354,6 +358,7 @@ class Agent:
             history_compactor: Optional custom history compaction strategy.
             history_compress_threshold_tokens: Soft compression threshold. If <= 0,
                 defaults to 70% of the LLM context window.
+            artifact_contract: Optional machine-checkable required output contract.
         """
         if adapter == "anthropic":
             from ..adapters.anthropic import AnthropicAdapter
@@ -383,6 +388,7 @@ class Agent:
             inject_project_context=inject_project_context,
             history_compactor=history_compactor,
             history_compress_threshold_tokens=history_compress_threshold_tokens,
+            artifact_contract=artifact_contract,
             **kwargs,
         )
 
@@ -432,22 +438,35 @@ class Agent:
 
         close_reason = "goal_met"
         close_error_class: str | None = None
+        artifact_validation: dict | None = None
         try:
             await self._flow.run(shared, self._llm_node)
         except (BudgetExceededError, LoopDetectedError) as e:
             shared["final_answer"] = shared.get("final_answer") or f"[stopped: {e}]"
             close_reason = str(e)
-            run.finalize(f"stopped:{type(e).__name__}")
+            if isinstance(e, BudgetExceededError):
+                run.finalize(StopReason.BUDGET_EXHAUSTED.value, RunStatus.BUDGET_EXHAUSTED)
+            else:
+                run.finalize(StopReason.LOOP_DETECTED.value, RunStatus.INCOMPLETE)
             await store.append(run.run_id, "RUN_STOPPED", {"reason": str(e), "metrics": run.snapshot_metrics()})
         except Exception as e:
             shared["final_answer"] = shared.get("final_answer") or f"[aborted: {e}]"
             close_reason = str(e)
             close_error_class = type(e).__name__
-            run.finalize(f"aborted:{type(e).__name__}")
+            run.finalize(f"{StopReason.ABORTED.value}:{type(e).__name__}", RunStatus.ERROR)
             await store.append_run_aborted(run.run_id, reason=str(e), error_class=type(e).__name__, metrics=run.snapshot_metrics())
         else:
-            run.finalize("goal_met")
-            await store.append(run.run_id, "RUN_STOPPED", {"reason": "goal_met", "metrics": run.snapshot_metrics()})
+            run.finalize(StopReason.GOAL_MET.value, RunStatus.SUCCESS)
+            if self._artifact_contract is not None:
+                result = self._artifact_contract.validate(self._workspace_root or ".")
+                artifact_validation = result.to_dict()
+                await store.append(run.run_id, "ARTIFACT_VALIDATION", artifact_validation)
+                if not result.ok:
+                    reason = StopReason.ARTIFACT_MISSING.value
+                    if any("schema" in err.lower() or "json" in err.lower() for err in result.errors):
+                        reason = StopReason.VALIDATION_FAILED.value
+                    run.finalize(reason, RunStatus.INCOMPLETE)
+            await store.append(run.run_id, "RUN_STOPPED", {"reason": run.stop_reason, "metrics": run.snapshot_metrics()})
         finally:
             try:
                 await store.close_open_tool_uses(run.run_id, reason=close_reason, error_class=close_error_class)
@@ -460,6 +479,8 @@ class Agent:
             stop_reason=run.stop_reason,
             metrics=run.snapshot_metrics(),
             events_path=str(store.events_path(run.run_id)),
+            status=run.status,
+            artifact_validation=artifact_validation,
         )
 
     def run_sync(self, goal: str) -> RunResult:

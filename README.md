@@ -116,6 +116,39 @@ budget = Budget(
 agent = Agent(llm=llm, tools=tools, budget=budget)
 ```
 
+### Artifact Contracts
+
+Use artifact contracts when a run must produce machine-checkable outputs. The
+agent can still work freely, but the framework marks the run `incomplete` if
+required artifacts are missing or invalid.
+
+```python
+from all_in_agents import Agent, ArtifactContract
+
+contract = ArtifactContract.files("research_plan.md", "observation.md")
+
+agent = Agent.quick(
+    model="gpt-4o",
+    workspace=".",
+    artifact_contract=contract,
+)
+result = agent.run_sync("Create the required research artifacts")
+
+assert result.status == "success"
+```
+
+JSON artifacts can be schema-checked when the `jsonschema` extra is installed:
+
+```python
+contract = ArtifactContract.json_files({
+    "metrics.json": {
+        "type": "object",
+        "required": ["score"],
+        "properties": {"score": {"type": "number"}},
+    }
+})
+```
+
 ### Tool Registry
 
 ```python

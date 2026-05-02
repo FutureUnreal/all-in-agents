@@ -1,6 +1,24 @@
 import time
 from dataclasses import dataclass, field
+from enum import Enum
 from typing import Any
+
+
+class RunStatus(str, Enum):
+    SUCCESS = "success"
+    INCOMPLETE = "incomplete"
+    ERROR = "error"
+    BUDGET_EXHAUSTED = "budget_exhausted"
+    INTERRUPTED = "interrupted"
+
+
+class StopReason(str, Enum):
+    GOAL_MET = "goal_met"
+    ARTIFACT_MISSING = "artifact_missing"
+    VALIDATION_FAILED = "validation_failed"
+    BUDGET_EXHAUSTED = "budget_exhausted"
+    LOOP_DETECTED = "loop_detected"
+    ABORTED = "aborted"
 
 
 @dataclass
@@ -12,6 +30,8 @@ class RunResult:
     stop_reason: str
     metrics: dict
     events_path: str
+    status: str = RunStatus.SUCCESS.value
+    artifact_validation: dict | None = None
 
     def __getitem__(self, key: str) -> Any:
         if hasattr(self, key):
@@ -65,6 +85,7 @@ class Run:
     policy_blocks: int = 0
     compression_count: int = 0
     stop_reason: str = ""
+    status: str = RunStatus.SUCCESS.value
 
     def check_budget(self, action_type: str, action_sig: str = "") -> None:
         elapsed = int(time.time() * 1000) - self._start_ms
@@ -110,8 +131,9 @@ class Run:
     def record_compression(self) -> None:
         self.compression_count += 1
 
-    def finalize(self, stop_reason: str) -> None:
+    def finalize(self, stop_reason: str, status: str | RunStatus = RunStatus.SUCCESS) -> None:
         self.stop_reason = stop_reason
+        self.status = status.value if isinstance(status, RunStatus) else status
 
     def snapshot_metrics(self) -> dict:
         wall_ms = int(time.time() * 1000) - self._start_ms
@@ -124,5 +146,6 @@ class Run:
             "tool_mix": self.tool_mix.copy(),
             "policy_blocks": self.policy_blocks,
             "compression_count": self.compression_count,
-            "wall_ms": wall_ms
+            "wall_ms": wall_ms,
+            "status": self.status,
         }

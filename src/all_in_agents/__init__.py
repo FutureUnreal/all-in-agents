@@ -1,4 +1,8 @@
-from .core import BaseNode, Node, BatchNode, Flow, Run, RunResult, Budget, BudgetExceededError, LoopDetectedError
+from .core import (
+    BaseNode, Node, BatchNode, Flow, Run, RunResult, RunStatus, StopReason,
+    Budget, BudgetExceededError, LoopDetectedError,
+    ArtifactSpec, ArtifactCheck, ArtifactValidationResult, ArtifactContract,
+)
 from .adapters import LLMAdapter, LLMResponse, ToolCall, ConfigError, LLMError, AnthropicAdapter, OpenAIAdapter, ErrorClass
 from .tools import Tool, ToolRegistry, ToolResponse, SideEffectLevel, BUILTIN_TOOLS
 from .tools.policy import ToolPolicy
@@ -15,7 +19,8 @@ from .agents import (
 __all__ = [
     # Core
     "BaseNode", "Node", "BatchNode", "Flow",
-    "Run", "RunResult", "Budget", "BudgetExceededError", "LoopDetectedError",
+    "Run", "RunResult", "RunStatus", "StopReason", "Budget", "BudgetExceededError", "LoopDetectedError",
+    "ArtifactSpec", "ArtifactCheck", "ArtifactValidationResult", "ArtifactContract",
     # Adapters
     "LLMAdapter", "LLMResponse", "ToolCall", "ConfigError", "LLMError",
     "AnthropicAdapter", "OpenAIAdapter", "ErrorClass",

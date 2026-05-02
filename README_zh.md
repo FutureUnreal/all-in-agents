@@ -96,6 +96,38 @@ budget = Budget(
 agent = Agent(llm=llm, tools=tools, budget=budget)
 ```
 
+### Artifact Contracts
+
+当一次运行必须产出可机器检查的文件时，可以使用 artifact contract。
+Agent 仍然可以自由执行，但缺少必要产物或产物无效时，框架会把本次运行标记为 `incomplete`。
+
+```python
+from all_in_agents import Agent, ArtifactContract
+
+contract = ArtifactContract.files("research_plan.md", "observation.md")
+
+agent = Agent.quick(
+    model="gpt-4o",
+    workspace=".",
+    artifact_contract=contract,
+)
+result = agent.run_sync("Create the required research artifacts")
+
+assert result.status == "success"
+```
+
+安装 `jsonschema` extra 后，JSON 产物也可以做 schema 校验：
+
+```python
+contract = ArtifactContract.json_files({
+    "metrics.json": {
+        "type": "object",
+        "required": ["score"],
+        "properties": {"score": {"type": "number"}},
+    }
+})
+```
+
 ### 工具注册表
 
 ```python
