@@ -1,9 +1,10 @@
 from __future__ import annotations
 
+import inspect
 from dataclasses import dataclass, field
 from typing import TYPE_CHECKING
 
-from .compactor import HistoryCompactor
+from .compactor import CompactionStrategy
 from ..utils import make_ulid as _make_ulid
 
 if TYPE_CHECKING:
@@ -72,7 +73,7 @@ def _group_by_turn(messages: list[dict]) -> list[list[dict]]:
 @dataclass
 class HistoryManager:
     max_context_tokens: int = 32_000
-    compactor: HistoryCompactor | None = None
+    compactor: CompactionStrategy | None = None
     compress_threshold_tokens: int = -1
     _messages: list[dict] = field(default_factory=list)
     _summary: str = ""
@@ -149,16 +150,38 @@ class HistoryManager:
     def needs_compression(self) -> bool:
         return _estimate_tokens(self._messages) > self._compress_threshold
 
+    async def _compact_with_strategy(
+        self,
+        compactor: CompactionStrategy,
+        llm: "LLMAdapter",
+        turns: list[list[dict]],
+    ):
+        """Call custom compactors with target_tokens when their signature supports it."""
+        method = compactor.compact_turns
+        supports_target = True
+        try:
+            supports_target = "target_tokens" in inspect.signature(method).parameters
+        except (TypeError, ValueError):
+            pass
+
+        if supports_target:
+            return await method(
+                llm,
+                turns,
+                max_context_tokens=self.max_context_tokens,
+                target_tokens=self._compress_threshold,
+            )
+        return await method(llm, turns, max_context_tokens=self.max_context_tokens)
+
     async def compress(self, llm: "LLMAdapter") -> bool:
         if not self.needs_compression():
             return True
 
         if self._compactor is not None:
             turns = _group_by_turn(self._messages)
-            result = await self._compactor.compact_turns(
-                llm, turns, max_context_tokens=self.max_context_tokens
-            )
-            self._summary = result.summary
+            result = await self._compact_with_strategy(self._compactor, llm, turns)
+            if result.summary:
+                self._summary = result.summary
             self._messages = [msg for turn in result.kept_turns for msg in turn]
             return not result.used_fallback
 

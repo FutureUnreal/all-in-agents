@@ -164,7 +164,16 @@ python -m all_in_agents --project-context "Follow AGENTS.md and project context"
 
 ### 历史记录 & 压缩
 
-`HistoryManager` 在对话历史超过 `COMPRESS_THRESHOLD_TOKENS`（14,000 个 token）时进行压缩。它保留最近 12 轮对话和最近 3 条工具结果的原始内容，然后让 LLM 将更早的内容摘要为结构化 JSON（facts / decisions / open_threads）。
+`HistoryManager` 会在对话历史超过软阈值时进行压缩。默认阈值是模型上下文窗口的 70%；可以通过 `Agent` 或 `Agent.quick` 的 `history_compress_threshold_tokens` 覆盖。内置 compactor 会以同一个软阈值为目标，保留最近对话，将更早的内容摘要为结构化 JSON（facts / decisions / open_threads），摘要失败时回退到确定性裁剪。
+
+```python
+agent = Agent.quick(
+    model="gpt-4o",
+    history_compress_threshold_tokens=18_000,
+)
+```
+
+自定义压缩策略可以实现 `compact_turns(llm, turns, *, max_context_tokens, target_tokens=None)` 并返回 `CompactionResult`。
 
 ### 事件存储
 

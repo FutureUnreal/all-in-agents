@@ -1,5 +1,8 @@
 from .manager import HistoryManager
-from .compactor import HistoryCompactor, CompactionResult
+from .compactor import CompactionStrategy, HistoryCompactor, CompactionResult
 from .store import FileEventStore
 
-__all__ = ["HistoryManager", "HistoryCompactor", "CompactionResult", "FileEventStore"]
+__all__ = [
+    "HistoryManager", "CompactionStrategy", "HistoryCompactor",
+    "CompactionResult", "FileEventStore",
+]

@@ -12,7 +12,7 @@ from ..core.run import BudgetExceededError, Budget, LoopDetectedError, Run, RunR
 from ..history.manager import HistoryManager
 from ..history.store import FileEventStore
 from ..tools.policy import ToolPolicy
-from ..history.compactor import HistoryCompactor
+from ..history.compactor import CompactionStrategy
 from ..agents.harness import build_system_prompt
 from ..utils import make_ulid as _make_ulid, iso_now as _iso_now
 
@@ -284,7 +284,8 @@ class Agent:
         system: str = "",
         *,
         tool_policy: ToolPolicy | None = None,
-        history_compactor: HistoryCompactor | None = None,
+        history_compactor: CompactionStrategy | None = None,
+        history_compress_threshold_tokens: int = -1,
         on_tool_result: Callable[[dict], Any] | None = None,
         on_event: Callable[[dict], Any] | None = None,
         workspace_root: str | None = None,
@@ -301,6 +302,7 @@ class Agent:
         self._system = system
         self._tool_policy = tool_policy
         self._history_compactor = history_compactor
+        self._history_compress_threshold_tokens = history_compress_threshold_tokens
         self._on_tool_result = on_tool_result
         self._on_event = on_event
         self._workspace_root = workspace_root
@@ -333,6 +335,8 @@ class Agent:
         inject_project_context: bool = False,
         unsafe: bool = False,
         budget: Budget | None = None,
+        history_compactor: CompactionStrategy | None = None,
+        history_compress_threshold_tokens: int = -1,
         **kwargs: Any,
     ) -> "Agent":
         """One-line Agent factory for quick setup.
@@ -347,6 +351,9 @@ class Agent:
             inject_project_context: Load AGENTS.md and .context/ into the system prompt.
             unsafe: If True, use permissive approval (approve all tools).
             budget: Optional budget override.
+            history_compactor: Optional custom history compaction strategy.
+            history_compress_threshold_tokens: Soft compression threshold. If <= 0,
+                defaults to 70% of the LLM context window.
         """
         if adapter == "anthropic":
             from ..adapters.anthropic import AnthropicAdapter
@@ -374,6 +381,8 @@ class Agent:
             project_root=workspace,
             skills=skills,
             inject_project_context=inject_project_context,
+            history_compactor=history_compactor,
+            history_compress_threshold_tokens=history_compress_threshold_tokens,
             **kwargs,
         )
 
@@ -401,6 +410,7 @@ class Agent:
         history = HistoryManager(
             max_context_tokens=self._llm.max_context_tokens,
             compactor=self._history_compactor,
+            compress_threshold_tokens=self._history_compress_threshold_tokens,
         )
 
         await store.append(run.run_id, "RUN_CREATED", {"goal": goal})

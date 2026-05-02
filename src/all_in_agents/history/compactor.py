@@ -4,7 +4,7 @@ from __future__ import annotations
 import copy
 import json as _json
 from dataclasses import dataclass
-from typing import TYPE_CHECKING
+from typing import TYPE_CHECKING, Protocol
 
 if TYPE_CHECKING:
     from ..adapters.base import LLMAdapter
@@ -16,6 +16,20 @@ class CompactionResult:
     summary: str
     kept_turns: list[list[dict]]
     used_fallback: bool
+
+
+class CompactionStrategy(Protocol):
+    """Protocol for pluggable history compaction strategies."""
+
+    async def compact_turns(
+        self,
+        llm: "LLMAdapter",
+        turns: list[list[dict]],
+        *,
+        max_context_tokens: int,
+        target_tokens: int | None = None,
+    ) -> CompactionResult:
+        """Compact grouped conversation turns."""
 
 
 class HistoryCompactor:
@@ -114,14 +128,23 @@ class HistoryCompactor:
         llm: "LLMAdapter",
         turns: list[list[dict]],
         *,
-        max_context_tokens: int
+        max_context_tokens: int,
+        target_tokens: int | None = None,
     ) -> CompactionResult:
-        """Compact turns if they exceed max_context_tokens."""
+        """Compact turns if they exceed target_tokens.
+
+        ``max_context_tokens`` is the hard model context size. ``target_tokens``
+        is the soft budget selected by the framework or caller. When omitted,
+        the hard context size is used for backward-compatible behavior.
+        """
         def _estimate_tokens(turns_list: list[list[dict]]) -> int:
             return len(str(turns_list)) // 4
 
+        target = target_tokens or max_context_tokens
+        target = min(target, max_context_tokens)
+
         current_tokens = _estimate_tokens(turns)
-        if current_tokens <= max_context_tokens:
+        if current_tokens <= target:
             return CompactionResult(
                 summary="",
                 kept_turns=turns,
@@ -132,7 +155,7 @@ class HistoryCompactor:
         micro_turns = self.micro_compact_turns(turns)
         micro_tokens = _estimate_tokens(micro_turns)
 
-        if micro_tokens <= max_context_tokens:
+        if micro_tokens <= target:
             return CompactionResult(
                 summary="",
                 kept_turns=micro_turns,
@@ -158,4 +181,3 @@ class HistoryCompactor:
         except Exception:
             # Step 4: fallback to deterministic snip
             return self.deterministic_snip(micro_turns)
-

@@ -5,7 +5,7 @@ from .tools.policy import ToolPolicy
 from .tools.registry import unsafe_defaults
 from .tools.coerce import coerce_args
 from .history import HistoryManager, FileEventStore
-from .history.compactor import HistoryCompactor, CompactionResult
+from .history.compactor import CompactionStrategy, HistoryCompactor, CompactionResult
 from .agents import (
     Agent, ReActNode, LLMCallNode, ToolDispatchNode,
     SkillContext, discover_skills, load_skills, load_project_context, build_system_prompt,
@@ -23,7 +23,7 @@ __all__ = [
     "Tool", "ToolRegistry", "ToolResponse", "SideEffectLevel", "BUILTIN_TOOLS",
     "ToolPolicy", "unsafe_defaults", "coerce_args",
     # History
-    "HistoryManager", "FileEventStore", "HistoryCompactor", "CompactionResult",
+    "HistoryManager", "FileEventStore", "CompactionStrategy", "HistoryCompactor", "CompactionResult",
     # Agents
     "Agent", "ReActNode", "LLMCallNode", "ToolDispatchNode",
     "SkillContext", "discover_skills", "load_skills", "load_project_context", "build_system_prompt",

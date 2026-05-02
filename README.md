@@ -184,7 +184,16 @@ Hidden `.skills/` entries take precedence over `skills/` entries with the same n
 
 ### History & Compression
 
-`HistoryManager` compresses conversation history when it exceeds 70% of the model's context window (configurable via `compress_threshold_tokens`). It keeps the 12 most recent turns and the 3 most recent tool results verbatim, then asks the LLM to summarize everything older into structured JSON (facts / decisions / open_threads). If LLM summarization fails, it falls back to deterministic snipping.
+`HistoryManager` compresses conversation history when it exceeds a soft threshold. By default, that threshold is 70% of the model's context window; override it with `history_compress_threshold_tokens` on `Agent` or `Agent.quick`. The built-in compactor targets that same soft threshold, keeps recent turns verbatim, summarizes older turns into structured JSON (facts / decisions / open_threads), and falls back to deterministic snipping if summarization fails.
+
+```python
+agent = Agent.quick(
+    model="gpt-4o",
+    history_compress_threshold_tokens=18_000,
+)
+```
+
+Custom compaction strategies can implement `compact_turns(llm, turns, *, max_context_tokens, target_tokens=None)` and return `CompactionResult`.
 
 ### Event Store
 
