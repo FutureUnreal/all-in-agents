@@ -1,6 +1,7 @@
 from abc import ABC, abstractmethod
 from dataclasses import dataclass, field
 from enum import Enum
+import inspect
 
 
 @dataclass
@@ -57,3 +58,13 @@ class LLMAdapter(ABC):
         system: str = "",
         max_tokens: int = 2048,
     ) -> LLMResponse: ...
+
+
+async def close_async_client(client) -> None:
+    close = getattr(client, "close", None) or getattr(client, "aclose", None)
+    if close is None:
+        return
+
+    result = close()
+    if inspect.isawaitable(result):
+        await result

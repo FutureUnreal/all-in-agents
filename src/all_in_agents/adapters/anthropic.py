@@ -2,7 +2,7 @@ import asyncio
 import os
 import random
 
-from .base import ConfigError, ErrorClass, LLMAdapter, LLMError, LLMResponse, ToolCall
+from .base import ConfigError, ErrorClass, LLMAdapter, LLMError, LLMResponse, ToolCall, close_async_client
 
 _RETRYABLE_STATUS = {429, 500, 502, 503, 504}
 _STOP_REASON_MAP = {
@@ -51,49 +51,53 @@ class AnthropicAdapter(LLMAdapter):
             raise ConfigError("ANTHROPIC_API_KEY not set")
 
         client = anthropic.AsyncAnthropic(api_key=api_key)
-        anthropic_tools = [self._convert_tool(t) for t in (tools or [])]
 
-        last_err: Exception | None = None
-        delay_ms = self._base_delay_ms
+        try:
+            anthropic_tools = [self._convert_tool(t) for t in (tools or [])]
 
-        for attempt in range(self._max_retries):
-            try:
-                kwargs: dict = dict(
-                    model=self.model_id,
-                    messages=messages,
-                    max_tokens=max_tokens,
-                )
-                if system:
-                    if self._enable_cache:
-                        kwargs["system"] = [{"type": "text", "text": system,
-                                             "cache_control": {"type": "ephemeral"}}]
-                    else:
-                        kwargs["system"] = system
-                if anthropic_tools:
-                    kwargs["tools"] = anthropic_tools
+            last_err: Exception | None = None
+            delay_ms = self._base_delay_ms
 
-                resp = await client.messages.create(**kwargs)
-                return self._parse_response(resp)
+            for attempt in range(self._max_retries):
+                try:
+                    kwargs: dict = dict(
+                        model=self.model_id,
+                        messages=messages,
+                        max_tokens=max_tokens,
+                    )
+                    if system:
+                        if self._enable_cache:
+                            kwargs["system"] = [{"type": "text", "text": system,
+                                                 "cache_control": {"type": "ephemeral"}}]
+                        else:
+                            kwargs["system"] = system
+                    if anthropic_tools:
+                        kwargs["tools"] = anthropic_tools
 
-            except Exception as e:
-                status = getattr(getattr(e, "response", None), "status_code", None)
-                error_class, retry_after_ms = self._classify_error(e, status)
+                    resp = await client.messages.create(**kwargs)
+                    return self._parse_response(resp)
 
-                if status not in _RETRYABLE_STATUS and not self._is_transient(e):
-                    raise LLMError(str(e), error_class, attempt + 1,
-                                   retry_after_ms=retry_after_ms)
+                except Exception as e:
+                    status = getattr(getattr(e, "response", None), "status_code", None)
+                    error_class, retry_after_ms = self._classify_error(e, status)
 
-                last_err = e
-                last_retry_after_ms = retry_after_ms
-                if attempt < self._max_retries - 1:
-                    if last_retry_after_ms is not None:
-                        wait_ms = last_retry_after_ms
-                    else:
-                        wait_ms = random.random() * delay_ms
-                    await asyncio.sleep(wait_ms / 1000)
-                    delay_ms = min(int(delay_ms * self._backoff_multiplier), self._max_delay_ms)
+                    if status not in _RETRYABLE_STATUS and not self._is_transient(e):
+                        raise LLMError(str(e), error_class, attempt + 1,
+                                       retry_after_ms=retry_after_ms)
 
-        raise LLMError(str(last_err), ErrorClass.TRANSIENT, self._max_retries)
+                    last_err = e
+                    last_retry_after_ms = retry_after_ms
+                    if attempt < self._max_retries - 1:
+                        if last_retry_after_ms is not None:
+                            wait_ms = last_retry_after_ms
+                        else:
+                            wait_ms = random.random() * delay_ms
+                        await asyncio.sleep(wait_ms / 1000)
+                        delay_ms = min(int(delay_ms * self._backoff_multiplier), self._max_delay_ms)
+
+            raise LLMError(str(last_err), ErrorClass.TRANSIENT, self._max_retries)
+        finally:
+            await close_async_client(client)
 
     @staticmethod
     def _is_transient(e: Exception) -> bool:
