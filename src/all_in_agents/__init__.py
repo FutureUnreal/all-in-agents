@@ -1,7 +1,8 @@
 from .core import (
     BaseNode, Node, BatchNode, Flow, Run, RunResult, RunStatus, StopReason,
-    Budget, BudgetExceededError, LoopDetectedError,
+    Budget, BudgetExceededError, LoopDetectedError, ToolLimitExceededError,
     ArtifactSpec, ArtifactCheck, ArtifactValidationResult, ArtifactContract,
+    Workflow, Step, StepResult, WorkflowResult,
 )
 from .adapters import LLMAdapter, LLMResponse, ToolCall, ConfigError, LLMError, AnthropicAdapter, OpenAIAdapter, ErrorClass
 from .tools import Tool, ToolRegistry, ToolResponse, SideEffectLevel, BUILTIN_TOOLS
@@ -11,7 +12,7 @@ from .tools.coerce import coerce_args
 from .history import HistoryManager, FileEventStore
 from .history.compactor import CompactionStrategy, HistoryCompactor, CompactionResult
 from .agents import (
-    Agent, ReActNode, LLMCallNode, ToolDispatchNode,
+    Agent, AgentConfig, ReActNode, LLMCallNode, ToolDispatchNode,
     SkillContext, discover_skills, load_skills, load_project_context, build_system_prompt,
     MessageBus, TaskManager, MessageEnvelope, Task, TaskStatus,
 )
@@ -19,8 +20,9 @@ from .agents import (
 __all__ = [
     # Core
     "BaseNode", "Node", "BatchNode", "Flow",
-    "Run", "RunResult", "RunStatus", "StopReason", "Budget", "BudgetExceededError", "LoopDetectedError",
+    "Run", "RunResult", "RunStatus", "StopReason", "Budget", "BudgetExceededError", "LoopDetectedError", "ToolLimitExceededError",
     "ArtifactSpec", "ArtifactCheck", "ArtifactValidationResult", "ArtifactContract",
+    "Workflow", "Step", "StepResult", "WorkflowResult",
     # Adapters
     "LLMAdapter", "LLMResponse", "ToolCall", "ConfigError", "LLMError",
     "AnthropicAdapter", "OpenAIAdapter", "ErrorClass",
@@ -30,7 +32,7 @@ __all__ = [
     # History
     "HistoryManager", "FileEventStore", "CompactionStrategy", "HistoryCompactor", "CompactionResult",
     # Agents
-    "Agent", "ReActNode", "LLMCallNode", "ToolDispatchNode",
+    "Agent", "AgentConfig", "ReActNode", "LLMCallNode", "ToolDispatchNode",
     "SkillContext", "discover_skills", "load_skills", "load_project_context", "build_system_prompt",
     "MessageBus", "TaskManager", "MessageEnvelope", "Task", "TaskStatus",
 ]

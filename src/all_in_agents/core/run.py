@@ -23,7 +23,7 @@ class StopReason(str, Enum):
 
 @dataclass
 class RunResult:
-    """Typed return value from Agent.run(). Supports dict-style access for backward compatibility."""
+    """Typed return value from Agent.run()."""
 
     final_answer: str
     run_id: str
@@ -32,17 +32,6 @@ class RunResult:
     events_path: str
     status: str = RunStatus.SUCCESS.value
     artifact_validation: dict | None = None
-
-    def __getitem__(self, key: str) -> Any:
-        if hasattr(self, key):
-            return getattr(self, key)
-        raise KeyError(key)
-
-    def get(self, key: str, default: Any = None) -> Any:
-        return getattr(self, key, default)
-
-    def __contains__(self, key: str) -> bool:
-        return hasattr(self, key)
 
 
 class BudgetExceededError(Exception):
@@ -54,6 +43,13 @@ class BudgetExceededError(Exception):
 class LoopDetectedError(Exception):
     def __init__(self, action_sig: str, count: int):
         super().__init__(f"Loop detected: '{action_sig}' repeated {count} times")
+
+
+class ToolLimitExceededError(Exception):
+    def __init__(self, tool_name: str, dimension: str, current: int, limit: int):
+        self.tool_name = tool_name
+        self.dimension = dimension
+        super().__init__(f"Tool limit exceeded: {tool_name} {dimension}={current}/{limit}")
 
 
 @dataclass

@@ -28,13 +28,15 @@ class ToolPolicy:
         """Check if a tool is visible based on allowlist/denylist.
 
         Denylist takes priority. If allowlist is None, all tools are visible
-        (except those in denylist).
+        (except those in denylist). Supports both qualified (namespace:name)
+        and bare names.
         """
-        if tool_name in self.tool_denylist:
+        bare = tool_name.split(":", 1)[-1] if ":" in tool_name else tool_name
+        if tool_name in self.tool_denylist or bare in self.tool_denylist:
             return False
         if self.tool_allowlist is None:
             return True
-        return tool_name in self.tool_allowlist
+        return tool_name in self.tool_allowlist or bare in self.tool_allowlist
 
     def requires_approval(self, side_effect_level: SideEffectLevel) -> bool:
         """Check if a side effect level requires approval."""

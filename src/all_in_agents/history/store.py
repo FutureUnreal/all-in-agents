@@ -14,6 +14,8 @@ _SNAPSHOT_EVERY_MS = 30_000
 _SNAPSHOT_KEEP = 10
 _LOCK_TIMEOUT = 5.0
 
+SCHEMA_VERSION = "1"
+
 
 class FileEventStore:
     def __init__(
@@ -87,6 +89,7 @@ class FileEventStore:
             "run_id": run_id,
             "ts": _iso_now(),
             "type": event_type,
+            "schema_version": SCHEMA_VERSION,
             "payload": payload,
         }
         line = json.dumps(event, ensure_ascii=False)

@@ -1,3 +1,4 @@
+import asyncio
 from dataclasses import dataclass
 from typing import Any, Awaitable, Callable
 
@@ -7,7 +8,7 @@ try:
 except ImportError:
     _HAS_JSONSCHEMA = False
 
-from ..core.run import Run
+from ..core.run import Run, ToolLimitExceededError
 from .coerce import coerce_args
 from .policy import ToolPolicy, SideEffectLevel
 
@@ -28,6 +29,13 @@ class Tool:
     input_schema: dict
     side_effect_level: SideEffectLevel
     execute: Callable  # async (args: dict, run: Run) -> ToolResponse
+    max_calls: int | None = None
+    max_wall_ms: int | None = None
+    namespace: str = ""
+
+    @property
+    def qualified_name(self) -> str:
+        return f"{self.namespace}:{self.name}" if self.namespace else self.name
 
 
 async def _default_deny(name: str, args: dict) -> bool:
@@ -57,21 +65,32 @@ class ToolRegistry:
         self._policy = policy
 
     def register(self, tool: Tool) -> None:
-        self._tools[tool.name] = tool
+        self._tools[tool.qualified_name] = tool
 
     def get_tool(self, name: str) -> "Tool | None":
-        return self._tools.get(name)
+        tool = self._tools.get(name)
+        if tool is not None:
+            return tool
+        for t in self._tools.values():
+            if t.name == name:
+                return t
+        return None
 
     def get_schemas(self, policy: ToolPolicy | None = None) -> list[dict]:
         effective_policy = policy or self._policy
         if effective_policy is not None:
-            return [_to_schema(t) for t in self._tools.values() if effective_policy.is_tool_visible(t.name)]
+            return [_to_schema(t) for t in self._tools.values() if effective_policy.is_tool_visible(t.qualified_name)]
         return [_to_schema(t) for t in self._tools.values()]
 
     async def execute(self, name: str, args: dict, run: Run, *, policy: ToolPolicy | None = None) -> ToolResponse:
-        tool = self._tools.get(name)
+        tool = self.get_tool(name)
         if not tool:
             return ToolResponse("error", f"Unknown tool: {name}", "NOT_FOUND")
+
+        if tool.max_calls is not None:
+            used = run.tool_mix.get(name, 0)
+            if used >= tool.max_calls:
+                return ToolResponse("error", f"Tool '{name}' exceeded max_calls={tool.max_calls}", "TOOL_LIMIT")
 
         effective_policy = policy or self._policy
         if effective_policy is not None:
@@ -99,7 +118,13 @@ class ToolRegistry:
                 return ToolResponse("error", f"Tool '{name}' denied by approval", "POLICY_BLOCKED")
 
         try:
-            result = await tool.execute(args, run)
+            if tool.max_wall_ms is not None:
+                result = await asyncio.wait_for(
+                    tool.execute(args, run),
+                    timeout=tool.max_wall_ms / 1000,
+                )
+            else:
+                result = await tool.execute(args, run)
             if len(result.content) > MAX_CONTENT_LEN:
                 result = ToolResponse(
                     result.status,
@@ -107,13 +132,15 @@ class ToolRegistry:
                     result.error_class,
                 )
             return result
+        except asyncio.TimeoutError:
+            return ToolResponse("error", f"Tool '{name}' exceeded max_wall_ms={tool.max_wall_ms}", "TIMEOUT")
         except Exception as e:
             return ToolResponse("error", str(e), "INTERNAL_BUG")
 
 
 def _to_schema(tool: Tool) -> dict:
     return {
-        "name": tool.name,
+        "name": tool.qualified_name,
         "description": tool.description,
         "input_schema": tool.input_schema,
     }

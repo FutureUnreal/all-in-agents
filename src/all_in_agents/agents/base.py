@@ -4,6 +4,7 @@ import asyncio
 import copy
 import hashlib
 import json
+from dataclasses import dataclass, field
 from typing import TYPE_CHECKING, Callable, Awaitable, Any, Iterable
 
 from ..core.flow import Flow
@@ -275,11 +276,33 @@ class ToolDispatchNode(BaseNode):
         return "continue"
 
 
+@dataclass
+class AgentConfig:
+    """Typed configuration for Agent. All fields have sensible defaults."""
+
+    budget: Budget | None = None
+    run_dir: str = "./runs"
+    system: str = ""
+    tool_policy: ToolPolicy | None = None
+    history_compactor: CompactionStrategy | None = None
+    history_compress_threshold_tokens: int = -1
+    artifact_contract: ArtifactContract | None = None
+    on_tool_result: Callable[[dict], Any] | None = None
+    on_event: Callable[[dict], Any] | None = None
+    workspace_root: str | None = None
+    inject_project_context: bool = False
+    project_root: str | None = None
+    skills: Iterable[str] | str | None = None
+    redact_tool_result: Callable[[str, Any], Any] | None = None
+    tool_max_concurrency: int = 4
+
+
 class Agent:
     def __init__(
         self,
         llm: "LLMAdapter",
         tools: "ToolRegistry",
+        config: AgentConfig | None = None,
         budget: Budget | None = None,
         run_dir: str = "./runs",
         system: str = "",
@@ -297,6 +320,29 @@ class Agent:
         redact_tool_result: Callable[[str, Any], Any] | None = None,
         tool_max_concurrency: int = 4,
     ):
+        if config is not None:
+            budget = budget if budget is not None else config.budget
+            run_dir = run_dir if run_dir != "./runs" else config.run_dir
+            system = system if system != "" else config.system
+            tool_policy = tool_policy if tool_policy is not None else config.tool_policy
+            history_compactor = history_compactor if history_compactor is not None else config.history_compactor
+            history_compress_threshold_tokens = (
+                history_compress_threshold_tokens
+                if history_compress_threshold_tokens != -1
+                else config.history_compress_threshold_tokens
+            )
+            artifact_contract = artifact_contract if artifact_contract is not None else config.artifact_contract
+            on_tool_result = on_tool_result if on_tool_result is not None else config.on_tool_result
+            on_event = on_event if on_event is not None else config.on_event
+            workspace_root = workspace_root if workspace_root is not None else config.workspace_root
+            inject_project_context = inject_project_context or config.inject_project_context
+            project_root = project_root if project_root is not None else config.project_root
+            skills = skills if skills is not None else config.skills
+            redact_tool_result = redact_tool_result if redact_tool_result is not None else config.redact_tool_result
+            tool_max_concurrency = (
+                tool_max_concurrency if tool_max_concurrency != 4 else config.tool_max_concurrency
+            )
+
         self._llm = llm
         self._tools = tools
         self._budget = budget or Budget()
