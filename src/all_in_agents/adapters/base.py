@@ -1,7 +1,8 @@
 from abc import ABC, abstractmethod
-from dataclasses import dataclass, field
+from dataclasses import dataclass, field, replace
 from enum import Enum
 import inspect
+from typing import Any
 
 
 @dataclass
@@ -18,6 +19,58 @@ class LLMResponse:
     input_tokens: int
     output_tokens: int
     stop_reason: str  # "end_turn" | "tool_use" | "max_tokens"
+
+
+@dataclass
+class GenerationOptions:
+    """Provider-neutral controls for a single model generation call."""
+
+    temperature: float | None = None
+    top_p: float | None = None
+    response_format: dict[str, Any] | None = None
+    reasoning_effort: str | None = None
+    extra: dict[str, Any] = field(default_factory=dict)
+
+    def merge(self, override: "GenerationOptions | None" = None) -> "GenerationOptions":
+        if override is None:
+            return replace(self, extra=dict(self.extra))
+
+        extra = dict(self.extra)
+        extra.update(override.extra)
+        return GenerationOptions(
+            temperature=override.temperature if override.temperature is not None else self.temperature,
+            top_p=override.top_p if override.top_p is not None else self.top_p,
+            response_format=(
+                override.response_format if override.response_format is not None else self.response_format
+            ),
+            reasoning_effort=(
+                override.reasoning_effort if override.reasoning_effort is not None else self.reasoning_effort
+            ),
+            extra=extra,
+        )
+
+    @classmethod
+    def from_values(
+        cls,
+        options: "GenerationOptions | None" = None,
+        *,
+        temperature: float | None = None,
+        top_p: float | None = None,
+        response_format: dict[str, Any] | None = None,
+        reasoning_effort: str | None = None,
+        extra: dict[str, Any] | None = None,
+    ) -> "GenerationOptions":
+        base = options.merge() if options is not None else cls()
+        merged_extra = dict(base.extra)
+        if extra:
+            merged_extra.update(extra)
+        return cls(
+            temperature=temperature if temperature is not None else base.temperature,
+            top_p=top_p if top_p is not None else base.top_p,
+            response_format=response_format if response_format is not None else base.response_format,
+            reasoning_effort=reasoning_effort if reasoning_effort is not None else base.reasoning_effort,
+            extra=merged_extra,
+        )
 
 
 class ErrorClass(str, Enum):
@@ -57,6 +110,7 @@ class LLMAdapter(ABC):
         tools: list[dict] | None = None,
         system: str = "",
         max_tokens: int = 2048,
+        options: GenerationOptions | None = None,
     ) -> LLMResponse: ...
 
 

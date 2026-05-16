@@ -274,10 +274,35 @@ await bus.send(MessageEnvelope(
 Both adapters classify errors (TRANSIENT, RATE_LIMITED, AUTH, INVALID_REQUEST, INTERNAL) and retry with exponential backoff. Rate-limited requests honor `retry-after` headers when available.
 
 ```python
-from all_in_agents import OpenAIAdapter, AnthropicAdapter
+from all_in_agents import Agent, GenerationOptions, OpenAIAdapter, AnthropicAdapter
 
 llm = OpenAIAdapter(model="gpt-4o-mini", max_retries=3)
 llm = AnthropicAdapter(model="claude-sonnet-4-6", max_retries=3)
+```
+
+OpenAI requests support both Chat Completions and Responses API backends. Generation controls live on the adapter, keeping `Agent` independent from provider-specific request fields.
+
+```python
+llm = OpenAIAdapter(
+    model="gpt-5",
+    api="responses",  # or "chat_completions" for OpenAI-compatible APIs
+    response_format={"type": "json_object"},
+    reasoning_effort="medium",
+    temperature=0.2,
+    model_kwargs={"metadata": {"app": "demo"}},
+)
+
+agent = Agent.quick(
+    model="gpt-5",
+    api="responses",
+    response_format={"type": "json_object"},
+    reasoning_effort="low",
+)
+
+await llm.generate(
+    [{"role": "user", "content": "Return JSON."}],
+    options=GenerationOptions(reasoning_effort="high"),
+)
 ```
 
 ## Architecture
@@ -293,7 +318,7 @@ all_in_agents/
 │   ├── flow.py      Flow (graph runner, auto-retry via exec_with_retry)
 │   └── run.py       Run · RunResult · Budget · BudgetExceededError · LoopDetectedError
 ├── adapters/
-│   ├── base.py      LLMAdapter · LLMResponse · ToolCall · LLMError · ErrorClass
+│   ├── base.py      LLMAdapter · LLMResponse · ToolCall · GenerationOptions · LLMError · ErrorClass
 │   ├── anthropic.py AnthropicAdapter (error classification, prompt caching)
 │   └── openai.py    OpenAIAdapter (error classification, rate-limit tracking)
 ├── tools/
@@ -306,7 +331,8 @@ all_in_agents/
 │   ├── compactor.py HistoryCompactor (micro-compact + summarize + fallback)
 │   └── store.py     FileEventStore (append-only NDJSON, event callbacks)
 └── agents/
-    ├── base.py      Agent · Agent.quick() · LLMCallNode · ToolDispatchNode
+    ├── base.py      Agent · AgentConfig · Agent.quick()
+    ├── nodes.py     ReActNode · LLMCallNode · ToolDispatchNode
     ├── harness.py   AGENTS.md / .context/ project context loader
     └── multi.py     MessageBus · TaskManager · MessageEnvelope · Task · TaskStatus
 ```

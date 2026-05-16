@@ -253,10 +253,35 @@ await bus.send(MessageEnvelope(
 两个适配器均支持在瞬时错误时以指数退避加抖动方式自动重试。
 
 ```python
-from all_in_agents import OpenAIAdapter, AnthropicAdapter
+from all_in_agents import Agent, GenerationOptions, OpenAIAdapter, AnthropicAdapter
 
 llm = OpenAIAdapter(model="gpt-4o-mini", max_retries=3)
 llm = AnthropicAdapter(model="claude-sonnet-4-6", max_retries=3)
+```
+
+OpenAI 适配器同时支持 Chat Completions 和 Responses API。生成参数放在 adapter 层，`Agent` 核心不感知供应商字段。
+
+```python
+llm = OpenAIAdapter(
+    model="gpt-5",
+    api="responses",  # OpenAI-compatible API 可继续用 "chat_completions"
+    response_format={"type": "json_object"},
+    reasoning_effort="medium",
+    temperature=0.2,
+    model_kwargs={"metadata": {"app": "demo"}},
+)
+
+agent = Agent.quick(
+    model="gpt-5",
+    api="responses",
+    response_format={"type": "json_object"},
+    reasoning_effort="low",
+)
+
+await llm.generate(
+    [{"role": "user", "content": "Return JSON."}],
+    options=GenerationOptions(reasoning_effort="high"),
+)
 ```
 
 ## 架构
@@ -271,7 +296,7 @@ all_in_agents/
 │   ├── flow.py      Flow (graph runner)
 │   └── run.py       Run · Budget · BudgetExceededError · LoopDetectedError
 ├── adapters/
-│   ├── base.py      LLMAdapter · LLMResponse · ToolCall · LLMError · ConfigError
+│   ├── base.py      LLMAdapter · LLMResponse · ToolCall · GenerationOptions · LLMError · ConfigError
 │   ├── anthropic.py AnthropicAdapter (exponential backoff, retry)
 │   └── openai.py    OpenAIAdapter
 ├── tools/
@@ -281,7 +306,8 @@ all_in_agents/
 │   ├── manager.py   HistoryManager (LLM-based compression)
 │   └── store.py     FileEventStore (append-only NDJSON)
 └── agents/
-    ├── base.py      Agent · ReActNode · LLMCallNode · ToolDispatchNode
+    ├── base.py      Agent · AgentConfig · Agent.quick()
+    ├── nodes.py     ReActNode · LLMCallNode · ToolDispatchNode
     └── multi.py     MessageBus · TaskManager · MessageEnvelope · Task · TaskStatus
 ```
 

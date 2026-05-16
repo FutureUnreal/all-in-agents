@@ -1,8 +1,18 @@
 import asyncio
 import os
 import random
+from typing import Any
 
-from .base import ConfigError, ErrorClass, LLMAdapter, LLMError, LLMResponse, ToolCall, close_async_client
+from .base import (
+    ConfigError,
+    ErrorClass,
+    GenerationOptions,
+    LLMAdapter,
+    LLMError,
+    LLMResponse,
+    ToolCall,
+    close_async_client,
+)
 
 _RETRYABLE_STATUS = {429, 500, 502, 503, 504}
 _STOP_REASON_MAP = {
@@ -25,6 +35,10 @@ class AnthropicAdapter(LLMAdapter):
         max_delay_ms: int = 8_000,
         backoff_multiplier: float = 2.0,
         enable_cache: bool = False,
+        options: GenerationOptions | None = None,
+        temperature: float | None = None,
+        top_p: float | None = None,
+        model_kwargs: dict[str, Any] | None = None,
     ):
         self.model_id = model
         self._api_key = api_key
@@ -33,6 +47,12 @@ class AnthropicAdapter(LLMAdapter):
         self._max_delay_ms = max_delay_ms
         self._backoff_multiplier = backoff_multiplier
         self._enable_cache = enable_cache
+        self._options = GenerationOptions.from_values(
+            options,
+            temperature=temperature,
+            top_p=top_p,
+            extra=model_kwargs,
+        )
 
     async def generate(
         self,
@@ -40,6 +60,7 @@ class AnthropicAdapter(LLMAdapter):
         tools: list[dict] | None = None,
         system: str = "",
         max_tokens: int = 2048,
+        options: GenerationOptions | None = None,
     ) -> LLMResponse:
         try:
             import anthropic
@@ -53,6 +74,7 @@ class AnthropicAdapter(LLMAdapter):
         client = anthropic.AsyncAnthropic(api_key=api_key)
 
         try:
+            call_options = self._options.merge(options)
             anthropic_tools = [self._convert_tool(t) for t in (tools or [])]
 
             last_err: Exception | None = None
@@ -73,6 +95,11 @@ class AnthropicAdapter(LLMAdapter):
                             kwargs["system"] = system
                     if anthropic_tools:
                         kwargs["tools"] = anthropic_tools
+                    if call_options.temperature is not None:
+                        kwargs["temperature"] = call_options.temperature
+                    if call_options.top_p is not None:
+                        kwargs["top_p"] = call_options.top_p
+                    kwargs.update(call_options.extra)
 
                     resp = await client.messages.create(**kwargs)
                     return self._parse_response(resp)

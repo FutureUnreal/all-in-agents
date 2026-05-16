@@ -4,7 +4,10 @@ from .core import (
     ArtifactSpec, ArtifactCheck, ArtifactValidationResult, ArtifactContract,
     Workflow, Step, StepResult, WorkflowResult,
 )
-from .adapters import LLMAdapter, LLMResponse, ToolCall, ConfigError, LLMError, AnthropicAdapter, OpenAIAdapter, ErrorClass
+from .adapters import (
+    LLMAdapter, LLMResponse, ToolCall, GenerationOptions, ConfigError, LLMError,
+    AnthropicAdapter, OpenAIAdapter, ErrorClass,
+)
 from .tools import Tool, ToolRegistry, ToolResponse, SideEffectLevel, BUILTIN_TOOLS
 from .tools.policy import ToolPolicy
 from .tools.registry import unsafe_defaults
@@ -24,7 +27,7 @@ __all__ = [
     "ArtifactSpec", "ArtifactCheck", "ArtifactValidationResult", "ArtifactContract",
     "Workflow", "Step", "StepResult", "WorkflowResult",
     # Adapters
-    "LLMAdapter", "LLMResponse", "ToolCall", "ConfigError", "LLMError",
+    "LLMAdapter", "LLMResponse", "ToolCall", "GenerationOptions", "ConfigError", "LLMError",
     "AnthropicAdapter", "OpenAIAdapter", "ErrorClass",
     # Tools
     "Tool", "ToolRegistry", "ToolResponse", "SideEffectLevel", "BUILTIN_TOOLS",
