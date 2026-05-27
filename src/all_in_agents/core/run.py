@@ -32,6 +32,7 @@ class RunResult:
     events_path: str
     status: str = RunStatus.SUCCESS.value
     artifact_validation: dict | None = None
+    trajectory: list[dict] | None = None
 
 
 class BudgetExceededError(Exception):

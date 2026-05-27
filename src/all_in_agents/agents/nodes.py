@@ -80,7 +80,7 @@ class ReActNode(BaseNode):
             history.add_tool_result(tc.id, result)
 
         if history.needs_compression():
-            await history.compress(shared["llm"])
+            await history.compress(shared.get("compression_llm", shared["llm"]))
             if store:
                 await store.append(run.run_id, "MEMORY_UPDATED", {"summary": history._summary[:200]})
 
@@ -251,7 +251,7 @@ class ToolDispatchNode(BaseNode):
                     pass  # callback errors must not interrupt main flow
 
         if history.needs_compression():
-            await history.compress(shared["llm"])
+            await history.compress(shared.get("compression_llm", shared["llm"]))
             run.record_compression()
             if store:
                 await store.append(run.run_id, "MEMORY_UPDATED", {"summary": history._summary[:200]})

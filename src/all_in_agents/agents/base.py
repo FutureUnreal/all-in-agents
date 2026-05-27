@@ -3,7 +3,7 @@ from __future__ import annotations
 from dataclasses import dataclass, field
 from typing import TYPE_CHECKING, Callable, Any, Iterable
 
-from ..core.flow import Flow
+from ..core.flow import Flow, FlowHooks
 from ..core.artifacts import ArtifactContract
 from ..core.run import BudgetExceededError, Budget, LoopDetectedError, Run, RunResult, RunStatus, StopReason
 from ..adapters.base import GenerationOptions
@@ -40,9 +40,13 @@ class AgentConfig:
     tool_policy: ToolPolicy | None = None
     history_compactor: CompactionStrategy | None = None
     history_compress_threshold_tokens: int = -1
+    compression_llm: Any = None
     artifact_contract: ArtifactContract | None = None
     on_tool_result: Callable[[dict], Any] | None = None
     on_event: Callable[[dict], Any] | None = None
+    flow_hooks: FlowHooks | None = None
+    flow_copy_nodes: bool = True
+    include_trajectory: bool = False
     workspace_root: str | None = None
     inject_project_context: bool = False
     project_root: str | None = None
@@ -64,9 +68,13 @@ class Agent:
         tool_policy: ToolPolicy | None = None,
         history_compactor: CompactionStrategy | None = None,
         history_compress_threshold_tokens: int = -1,
+        compression_llm: "LLMAdapter | None" = None,
         artifact_contract: ArtifactContract | None = None,
         on_tool_result: Callable[[dict], Any] | None = None,
         on_event: Callable[[dict], Any] | None = None,
+        flow_hooks: FlowHooks | None = None,
+        flow_copy_nodes: bool = True,
+        include_trajectory: bool = False,
         workspace_root: str | None = None,
         inject_project_context: bool = False,
         project_root: str | None = None,
@@ -85,9 +93,13 @@ class Agent:
                 if history_compress_threshold_tokens != -1
                 else config.history_compress_threshold_tokens
             )
+            compression_llm = compression_llm if compression_llm is not None else config.compression_llm
             artifact_contract = artifact_contract if artifact_contract is not None else config.artifact_contract
             on_tool_result = on_tool_result if on_tool_result is not None else config.on_tool_result
             on_event = on_event if on_event is not None else config.on_event
+            flow_hooks = flow_hooks if flow_hooks is not None else config.flow_hooks
+            flow_copy_nodes = flow_copy_nodes if flow_copy_nodes is not True else config.flow_copy_nodes
+            include_trajectory = include_trajectory or config.include_trajectory
             workspace_root = workspace_root if workspace_root is not None else config.workspace_root
             inject_project_context = inject_project_context or config.inject_project_context
             project_root = project_root if project_root is not None else config.project_root
@@ -105,16 +117,18 @@ class Agent:
         self._tool_policy = tool_policy
         self._history_compactor = history_compactor
         self._history_compress_threshold_tokens = history_compress_threshold_tokens
+        self._compression_llm = compression_llm
         self._artifact_contract = artifact_contract
         self._on_tool_result = on_tool_result
         self._on_event = on_event
+        self._include_trajectory = include_trajectory
         self._workspace_root = workspace_root
         self._inject_project_context = inject_project_context
         self._project_root = project_root
         self._skills = skills
         self._redact_tool_result = redact_tool_result
         self._tool_max_concurrency = tool_max_concurrency
-        self._flow = Flow()
+        self._flow = Flow(hooks=flow_hooks, copy_nodes=flow_copy_nodes)
 
         # Decomposed nodes
         self._llm_node = LLMCallNode()
@@ -140,6 +154,7 @@ class Agent:
         budget: Budget | None = None,
         history_compactor: CompactionStrategy | None = None,
         history_compress_threshold_tokens: int = -1,
+        compression_llm: "LLMAdapter | None" = None,
         artifact_contract: ArtifactContract | None = None,
         api: str = "chat_completions",
         llm_options: GenerationOptions | None = None,
@@ -163,6 +178,7 @@ class Agent:
             unsafe: If True, use permissive approval (approve all tools).
             budget: Optional budget override.
             history_compactor: Optional custom history compaction strategy.
+            compression_llm: Optional cheaper/specialized LLM used for history compression.
             history_compress_threshold_tokens: Soft compression threshold. If <= 0,
                 defaults to 70% of the LLM context window.
             artifact_contract: Optional machine-checkable required output contract.
@@ -210,6 +226,7 @@ class Agent:
             inject_project_context=inject_project_context,
             history_compactor=history_compactor,
             history_compress_threshold_tokens=history_compress_threshold_tokens,
+            compression_llm=compression_llm,
             artifact_contract=artifact_contract,
             **kwargs,
         )
@@ -254,6 +271,7 @@ class Agent:
 
         shared: dict = {
             "run": run, "llm": self._llm, "tools": self._tools,
+            "compression_llm": self._compression_llm or self._llm,
             "history": history, "store": store, "system": system,
             "final_answer": "",
         }
@@ -295,6 +313,8 @@ class Agent:
             except Exception:
                 pass
 
+        trajectory = store.build_trajectory(run.run_id) if self._include_trajectory else None
+
         return RunResult(
             final_answer=shared.get("final_answer", ""),
             run_id=run.run_id,
@@ -303,6 +323,7 @@ class Agent:
             events_path=str(store.events_path(run.run_id)),
             status=run.status,
             artifact_validation=artifact_validation,
+            trajectory=trajectory,
         )
 
     def run_sync(self, goal: str) -> RunResult:

@@ -1,5 +1,5 @@
 from .core import (
-    BaseNode, Node, BatchNode, Flow, Run, RunResult, RunStatus, StopReason,
+    BaseNode, Node, BatchNode, ConditionalNode, Flow, FlowHooks, Run, RunResult, RunStatus, StopReason,
     Budget, BudgetExceededError, LoopDetectedError, ToolLimitExceededError,
     ArtifactSpec, ArtifactCheck, ArtifactValidationResult, ArtifactContract,
     Workflow, Step, StepResult, WorkflowResult,
@@ -22,7 +22,7 @@ from .agents import (
 
 __all__ = [
     # Core
-    "BaseNode", "Node", "BatchNode", "Flow",
+    "BaseNode", "Node", "BatchNode", "ConditionalNode", "Flow", "FlowHooks",
     "Run", "RunResult", "RunStatus", "StopReason", "Budget", "BudgetExceededError", "LoopDetectedError", "ToolLimitExceededError",
     "ArtifactSpec", "ArtifactCheck", "ArtifactValidationResult", "ArtifactContract",
     "Workflow", "Step", "StepResult", "WorkflowResult",

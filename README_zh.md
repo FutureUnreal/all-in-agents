@@ -79,7 +79,22 @@ flow = Flow()
 await flow.run(shared={}, start=node_a)
 ```
 
-**状态契约**：所有节点间的状态存储在 `shared` 字典中。节点实例字段仅用于保存配置信息。
+**状态契约**：默认情况下 `Flow` 会在执行前浅拷贝 node，因此跨节点状态应该放在 `shared` 字典里。node 实例字段只建议保存配置。如果确实需要持久化 node 实例状态，可以使用 `Flow(copy_nodes=False)`。
+
+Flow 也支持生命周期 hooks 和条件节点：
+
+```python
+from all_in_agents import ConditionalNode, Flow, FlowHooks
+
+hooks = FlowHooks(
+    on_node_start=lambda ctx: print("start", ctx["node_name"]),
+    on_node_end=lambda ctx: print("end", ctx["node_name"], ctx["action"]),
+)
+
+optional_node = ConditionalNode(node_a, lambda shared: shared.get("enabled", False))
+flow = Flow(hooks=hooks)
+await flow.run(shared={"enabled": True}, start=optional_node)
+```
 
 ### 预算 & 循环检测
 
@@ -202,10 +217,13 @@ python -m all_in_agents --project-context "Follow AGENTS.md and project context"
 agent = Agent.quick(
     model="gpt-4o",
     history_compress_threshold_tokens=18_000,
+    # compression_llm=cheap_llm,  # 可选：使用单独的低成本摘要模型
 )
 ```
 
 自定义压缩策略可以实现 `compact_turns(llm, turns, *, max_context_tokens, target_tokens=None)` 并返回 `CompactionResult`。
+
+`RunResult.events_path` 始终指向 NDJSON 事件日志。如果需要在内存中直接拿到紧凑轨迹用于评估或编排，可以用 `include_trajectory=True` 创建 Agent；返回的 `RunResult.trajectory` 会包含 assistant 消息、工具调用/结果、产物校验和运行结束事件。
 
 ### 事件存储
 
@@ -292,8 +310,8 @@ await llm.generate(
 ```
 all_in_agents/
 ├── core/
-│   ├── node.py      BaseNode · Node · BatchNode
-│   ├── flow.py      Flow (graph runner)
+│   ├── node.py      BaseNode · Node · BatchNode · ConditionalNode
+│   ├── flow.py      Flow · FlowHooks (graph runner)
 │   └── run.py       Run · Budget · BudgetExceededError · LoopDetectedError
 ├── adapters/
 │   ├── base.py      LLMAdapter · LLMResponse · ToolCall · GenerationOptions · LLMError · ConfigError

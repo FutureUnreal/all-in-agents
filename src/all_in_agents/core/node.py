@@ -1,7 +1,9 @@
 import asyncio
 import copy
 from abc import ABC, abstractmethod
-from typing import Any
+from typing import Any, Awaitable, Callable
+
+_SKIPPED = object()
 
 
 class BaseNode(ABC):
@@ -74,3 +76,38 @@ class BatchNode(BaseNode):
 
     @abstractmethod
     async def exec_item(self, item: Any) -> Any: ...
+
+
+class ConditionalNode(BaseNode):
+    """Wrap a node and skip it when ``predicate(shared)`` is false."""
+
+    def __init__(
+        self,
+        node: BaseNode,
+        predicate: Callable[[dict], bool | Awaitable[bool]],
+        *,
+        skip_action: str = "skip",
+    ):
+        super().__init__()
+        self.node = node
+        self.predicate = predicate
+        self.skip_action = skip_action
+        self.successors.update(node.successors)
+
+    async def prep(self, shared: dict) -> dict:
+        should_run = self.predicate(shared)
+        if hasattr(should_run, "__await__"):
+            should_run = await should_run
+        if not should_run:
+            return {"skipped": True, "prep_result": None}
+        return {"skipped": False, "prep_result": await self.node.prep(shared)}
+
+    async def exec(self, prep_result: dict) -> Any:
+        if prep_result.get("skipped"):
+            return _SKIPPED
+        return await self.node.exec_with_retry(prep_result["prep_result"])
+
+    async def post(self, shared: dict, exec_result: Any) -> str:
+        if exec_result is _SKIPPED:
+            return self.skip_action
+        return await self.node.post(shared, exec_result)

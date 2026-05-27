@@ -99,7 +99,22 @@ flow = Flow()
 await flow.run(shared={}, start=node_a)
 ```
 
-**State contract**: all inter-node state lives in `shared` dict. Node instance fields hold only configuration.
+**State contract**: by default `Flow` shallow-copies each node before execution, so inter-node state should live in the `shared` dict. Node instance fields should hold configuration. If a flow intentionally needs persistent node instance state, use `Flow(copy_nodes=False)`.
+
+Flows also support lifecycle hooks and conditional nodes:
+
+```python
+from all_in_agents import ConditionalNode, Flow, FlowHooks
+
+hooks = FlowHooks(
+    on_node_start=lambda ctx: print("start", ctx["node_name"]),
+    on_node_end=lambda ctx: print("end", ctx["node_name"], ctx["action"]),
+)
+
+optional_node = ConditionalNode(node_a, lambda shared: shared.get("enabled", False))
+flow = Flow(hooks=hooks)
+await flow.run(shared={"enabled": True}, start=optional_node)
+```
 
 ### Budget & Loop Detection
 
@@ -223,10 +238,13 @@ Hidden `.skills/` entries take precedence over `skills/` entries with the same n
 agent = Agent.quick(
     model="gpt-4o",
     history_compress_threshold_tokens=18_000,
+    # compression_llm=cheap_llm,  # optionally use a separate summarizer model
 )
 ```
 
 Custom compaction strategies can implement `compact_turns(llm, turns, *, max_context_tokens, target_tokens=None)` and return `CompactionResult`.
+
+`RunResult.events_path` always points to the NDJSON event log. If you need a compact in-memory trace for evaluation or orchestration, construct the agent with `include_trajectory=True`; the returned `RunResult.trajectory` includes assistant messages, tool uses/results, artifact validation, and run stop events.
 
 ### Event Store
 
@@ -314,8 +332,8 @@ await llm.generate(
 all_in_agents/
 ├── cli.py       Lightweight CLI runner
 ├── core/
-│   ├── node.py      BaseNode · Node · BatchNode
-│   ├── flow.py      Flow (graph runner, auto-retry via exec_with_retry)
+│   ├── node.py      BaseNode · Node · BatchNode · ConditionalNode
+│   ├── flow.py      Flow · FlowHooks (graph runner, node lifecycle hooks)
 │   └── run.py       Run · RunResult · Budget · BudgetExceededError · LoopDetectedError
 ├── adapters/
 │   ├── base.py      LLMAdapter · LLMResponse · ToolCall · GenerationOptions · LLMError · ErrorClass

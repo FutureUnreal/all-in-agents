@@ -128,6 +128,34 @@ class FileEventStore:
                 events.append(ev)
         return events
 
+    def read_events(self, run_id: str, after_event_id: str | None = None) -> list[dict]:
+        """Read raw NDJSON events for a run."""
+        return self._read_events(run_id, after_event_id=after_event_id)
+
+    def build_trajectory(self, run_id: str) -> list[dict]:
+        """Return a compact in-memory trajectory suitable for RunResult."""
+        event_types = {
+            "ASSISTANT_MESSAGE",
+            "TOOL_USE",
+            "TOOL_RESULT",
+            "TOOL_ABORTED",
+            "ARTIFACT_VALIDATION",
+            "RUN_STOPPED",
+            "RUN_ABORTED",
+        }
+        trajectory = []
+        for ev in self._read_events(run_id):
+            ev_type = ev.get("type")
+            if ev_type not in event_types:
+                continue
+            trajectory.append({
+                "event_id": ev.get("event_id", ""),
+                "ts": ev.get("ts", ""),
+                "type": ev_type,
+                **(ev.get("payload") or {}),
+            })
+        return trajectory
+
     async def replay_all(self, run_id: str, reducer: Callable[[Any, dict], Any]) -> Any:
         state = None
         for ev in self._read_events(run_id):
