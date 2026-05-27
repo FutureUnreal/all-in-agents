@@ -6,12 +6,11 @@ import os
 import sys
 import time
 from dataclasses import dataclass, field
-from datetime import datetime, timezone
+from datetime import datetime
 from enum import Enum
 from pathlib import Path
-from typing import Any
 
-from ..utils import make_ulid as _make_ulid, iso_now as _iso_now
+from ..utils import make_ulid as _make_ulid
 
 _LOCK_TIMEOUT = 5.0  # seconds
 

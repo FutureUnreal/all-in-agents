@@ -1,8 +1,7 @@
 from __future__ import annotations
 
-import asyncio
 import json
-from dataclasses import dataclass, field
+from dataclasses import dataclass
 from pathlib import Path
 from typing import TYPE_CHECKING, Any
 
@@ -94,7 +93,7 @@ class Workflow:
         return self
 
     async def run(self, *, resume_from: str | None = None) -> WorkflowResult:
-        from ..agents.base import Agent, AgentConfig
+        from ..agents.base import Agent
 
         workflow_id = resume_from or _make_ulid()
         cp_dir = Path(self._checkpoint_dir) / workflow_id
@@ -117,14 +116,15 @@ class Workflow:
             )
 
         for step in ordered:
-            if step.name in completed:
+            previous = completed.get(step.name) or {}
+            if previous.get("status") == "success":
                 continue
 
             for dep in step.depends_on:
                 dep_status = completed.get(dep, {}).get("status")
                 if dep_status != "success":
                     results[step.name] = StepResult(name=step.name, status="skipped")
-                    self._save_checkpoint(cp_path, workflow_id, completed, results, step.name)
+                    self._save_checkpoint(cp_path, workflow_id, completed, step.name)
                     return WorkflowResult(
                         workflow_id=workflow_id,
                         steps=results,
@@ -146,7 +146,11 @@ class Workflow:
             agent = Agent(self._llm, self._tools, config=step_config)
 
             try:
-                run_result = await agent.run(goal)
+                run_result = await agent.run(
+                    goal,
+                    checkpoint=True,
+                    resume_from=previous.get("run_id") or None,
+                )
                 status = run_result.status
                 if status != "success":
                     status = "error"
@@ -161,8 +165,9 @@ class Workflow:
                 "final_answer": run_result.final_answer if run_result else "",
                 "run_id": run_result.run_id if run_result else "",
                 "events_path": run_result.events_path if run_result else "",
+                "checkpoint_path": run_result.checkpoint_path if run_result else "",
             }
-            self._save_checkpoint(cp_path, workflow_id, completed, results, None)
+            self._save_checkpoint(cp_path, workflow_id, completed, None)
 
             if status != "success":
                 return WorkflowResult(
@@ -197,10 +202,9 @@ class Workflow:
         cp_path: Path,
         workflow_id: str,
         completed: dict[str, dict],
-        results: dict[str, StepResult],
         failed_step: str | None,
     ) -> None:
-        pending = [s.name for s in self._steps if s.name not in completed]
+        pending = [s.name for s in self._steps if completed.get(s.name, {}).get("status") != "success"]
         data = {
             "workflow_id": workflow_id,
             "created_at": _iso_now(),

@@ -77,17 +77,17 @@ python -m all_in_agents --model gpt-4o --unsafe
 Everything is a node. A flow is a graph of nodes.
 
 ```python
-from all_in_agents import BaseNode, Flow
+from all_in_agents import BaseNode, Flow, NodeContext
 
 class MyNode(BaseNode):
-    async def prep(self, shared: dict):
-        return shared["input"]
+    async def prep(self, ctx: NodeContext):
+        return ctx.state["input"]
 
-    async def exec(self, prep_result):
+    async def exec(self, prep_result, ctx: NodeContext):
         return prep_result.upper()
 
-    async def post(self, shared: dict, exec_result) -> str:
-        shared["output"] = exec_result
+    async def post(self, ctx: NodeContext, exec_result) -> str:
+        ctx.state["output"] = exec_result
         return "default"   # action name → next node
 
 node_a = MyNode()
@@ -96,25 +96,37 @@ node_a >> node_b           # default edge
 # or: (node_a - "custom_action") >> node_b
 
 flow = Flow()
-await flow.run(shared={}, start=node_a)
+await flow.run(ctx, start=node_a)  # ctx is a RunContext
 ```
 
-**State contract**: by default `Flow` shallow-copies each node before execution, so inter-node state should live in the `shared` dict. Node instance fields should hold configuration. If a flow intentionally needs persistent node instance state, use `Flow(copy_nodes=False)`.
+**State contract**: node execution receives a typed `NodeContext`. Cross-node runtime state belongs in `ctx.state` or typed fields on `ctx.run_context`; node instance fields may hold persistent node-local state. If you want stateless copied node instances, use `Flow(copy_nodes=True)`.
 
-Flows also support lifecycle hooks and conditional nodes:
+Flows also support lifecycle hooks, conditional nodes, subflows, and flow-level error policies:
 
 ```python
-from all_in_agents import ConditionalNode, Flow, FlowHooks
+from all_in_agents import ConditionalNode, ErrorPolicy, Flow, FlowHooks, SubFlowNode
 
 hooks = FlowHooks(
-    on_node_start=lambda ctx: print("start", ctx["node_name"]),
-    on_node_end=lambda ctx: print("end", ctx["node_name"], ctx["action"]),
+    on_node_start=lambda ctx: print("start", ctx.node_name),
+    on_node_end=lambda ctx: print("end", ctx.node_name, ctx.action),
 )
 
-optional_node = ConditionalNode(node_a, lambda shared: shared.get("enabled", False))
-flow = Flow(hooks=hooks)
-await flow.run(shared={"enabled": True}, start=optional_node)
+optional_node = ConditionalNode(node_a, lambda ctx: ctx.state.get("enabled", False))
+subflow = SubFlowNode(start=node_b)
+optional_node >> subflow
+
+flow = Flow(
+    hooks=hooks,
+    error_policy=ErrorPolicy.retry(
+        max_attempts=3,
+        retry_exceptions=(TimeoutError,),
+        base_delay_ms=250,
+    ),
+)
+await flow.run(ctx, start=optional_node)
 ```
+
+Use `RetryPolicy` on a `Node` when retry behavior belongs to that node rather than the whole flow. It supports exception filtering, exponential backoff, jitter, and `retry_after_ms` hints from provider errors.
 
 ### Budget & Loop Detection
 
@@ -163,6 +175,23 @@ contract = ArtifactContract.json_files({
     }
 })
 ```
+
+`RunResult.status` is the broad state (`success`, `incomplete`, `error`, `budget_exhausted`, `interrupted`). `RunResult.stop_reason` is the machine-readable recovery hint, such as `goal_met`, `artifact_missing`, `validation_failed`, `model_unavailable`, `budget_exhausted`, or `loop_detected`.
+
+### Checkpoint & Resume
+
+Agent runs can checkpoint after each Flow node. A later process can resume from the run id or checkpoint path, using the same Flow graph and restored run/history/state context.
+
+```python
+result = await agent.run("Long task", checkpoint=True)
+
+resumed = await agent.run(
+    "Long task",
+    resume_from=result.run_id,  # or result.checkpoint_path
+)
+```
+
+For custom flows, pass a `JsonCheckpointStore` to `Flow.run`. Use explicit `checkpoint_id` values on nodes when a graph contains multiple nodes of the same class and must be resumed across process restarts.
 
 ### Tool Registry
 
@@ -244,7 +273,7 @@ agent = Agent.quick(
 
 Custom compaction strategies can implement `compact_turns(llm, turns, *, max_context_tokens, target_tokens=None)` and return `CompactionResult`.
 
-`RunResult.events_path` always points to the NDJSON event log. If you need a compact in-memory trace for evaluation or orchestration, construct the agent with `include_trajectory=True`; the returned `RunResult.trajectory` includes assistant messages, tool uses/results, artifact validation, and run stop events.
+`RunResult.events_path` always points to the NDJSON event log. If you need an in-memory trace for evaluation or orchestration, construct the agent with `include_trajectory=True`; the returned `RunResult.trace` is a typed `RunTrace`, and `RunResult.trajectory` returns a compact list view.
 
 ### Event Store
 
@@ -332,13 +361,23 @@ await llm.generate(
 all_in_agents/
 ├── cli.py       Lightweight CLI runner
 ├── core/
+│   ├── context.py   RunContext · NodeContext
+│   ├── checkpoint.py FlowCheckpoint · JsonCheckpointStore
 │   ├── node.py      BaseNode · Node · BatchNode · ConditionalNode
-│   ├── flow.py      Flow · FlowHooks (graph runner, node lifecycle hooks)
-│   └── run.py       Run · RunResult · Budget · BudgetExceededError · LoopDetectedError
+│   ├── flow.py      Flow · FlowHooks
+│   ├── errors.py    ErrorPolicy · ErrorDecision
+│   ├── retry.py     RetryPolicy
+│   ├── subflow.py   SubFlowNode
+│   ├── budget.py    Budget · BudgetLedger
+│   ├── trace.py     TraceEvent · RunTrace
+│   └── run.py       Run · RunResult
 ├── adapters/
 │   ├── base.py      LLMAdapter · LLMResponse · ToolCall · GenerationOptions · LLMError · ErrorClass
 │   ├── anthropic.py AnthropicAdapter (error classification, prompt caching)
-│   └── openai.py    OpenAIAdapter (error classification, rate-limit tracking)
+│   ├── openai.py    OpenAIAdapter (routing, lifecycle, retry)
+│   ├── openai_chat.py
+│   ├── openai_responses.py
+│   └── openai_utils.py
 ├── tools/
 │   ├── registry.py  ToolRegistry (safe-by-default, approval callbacks, jsonschema)
 │   ├── policy.py    ToolPolicy · SideEffectLevel
@@ -350,7 +389,7 @@ all_in_agents/
 │   └── store.py     FileEventStore (append-only NDJSON, event callbacks)
 └── agents/
     ├── base.py      Agent · AgentConfig · Agent.quick()
-    ├── nodes.py     ReActNode · LLMCallNode · ToolDispatchNode
+    ├── nodes.py     LLMCallNode · ToolDispatchNode
     ├── harness.py   AGENTS.md / .context/ project context loader
     └── multi.py     MessageBus · TaskManager · MessageEnvelope · Task · TaskStatus
 ```

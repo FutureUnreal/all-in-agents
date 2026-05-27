@@ -1,6 +1,8 @@
 from .core import (
-    BaseNode, Node, BatchNode, ConditionalNode, Flow, FlowHooks, Run, RunResult, RunStatus, StopReason,
-    Budget, BudgetExceededError, LoopDetectedError, ToolLimitExceededError,
+    BaseNode, Node, BatchNode, ConditionalNode, SubFlowNode, Flow, FlowHooks, Run, RunResult, RunStatus, StopReason,
+    RunContext, NodeContext, FlowCheckpoint, JsonCheckpointStore, ErrorAction, ErrorDecision, ErrorPolicy, RetryPolicy,
+    Budget, BudgetLedger, BudgetExceededError, LoopDetectedError, ToolLimitExceededError,
+    TraceEvent, RunTrace, TraceStore,
     ArtifactSpec, ArtifactCheck, ArtifactValidationResult, ArtifactContract,
     Workflow, Step, StepResult, WorkflowResult,
 )
@@ -15,15 +17,18 @@ from .tools.coerce import coerce_args
 from .history import HistoryManager, FileEventStore
 from .history.compactor import CompactionStrategy, HistoryCompactor, CompactionResult
 from .agents import (
-    Agent, AgentConfig, ReActNode, LLMCallNode, ToolDispatchNode,
+    Agent, AgentConfig, LLMCallNode, ToolDispatchNode,
     SkillContext, discover_skills, load_skills, load_project_context, build_system_prompt,
     MessageBus, TaskManager, MessageEnvelope, Task, TaskStatus,
 )
 
 __all__ = [
     # Core
-    "BaseNode", "Node", "BatchNode", "ConditionalNode", "Flow", "FlowHooks",
-    "Run", "RunResult", "RunStatus", "StopReason", "Budget", "BudgetExceededError", "LoopDetectedError", "ToolLimitExceededError",
+    "BaseNode", "Node", "BatchNode", "ConditionalNode", "SubFlowNode", "Flow", "FlowHooks",
+    "RunContext", "NodeContext", "ErrorAction", "ErrorDecision", "ErrorPolicy", "RetryPolicy",
+    "FlowCheckpoint", "JsonCheckpointStore",
+    "Run", "RunResult", "RunStatus", "StopReason", "Budget", "BudgetLedger", "BudgetExceededError", "LoopDetectedError", "ToolLimitExceededError",
+    "TraceEvent", "RunTrace", "TraceStore",
     "ArtifactSpec", "ArtifactCheck", "ArtifactValidationResult", "ArtifactContract",
     "Workflow", "Step", "StepResult", "WorkflowResult",
     # Adapters
@@ -35,7 +40,7 @@ __all__ = [
     # History
     "HistoryManager", "FileEventStore", "CompactionStrategy", "HistoryCompactor", "CompactionResult",
     # Agents
-    "Agent", "AgentConfig", "ReActNode", "LLMCallNode", "ToolDispatchNode",
+    "Agent", "AgentConfig", "LLMCallNode", "ToolDispatchNode",
     "SkillContext", "discover_skills", "load_skills", "load_project_context", "build_system_prompt",
     "MessageBus", "TaskManager", "MessageEnvelope", "Task", "TaskStatus",
 ]

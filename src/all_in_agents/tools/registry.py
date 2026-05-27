@@ -1,6 +1,6 @@
 import asyncio
 from dataclasses import dataclass
-from typing import Any, Awaitable, Callable
+from typing import Awaitable, Callable
 
 try:
     import jsonschema
@@ -8,7 +8,7 @@ try:
 except ImportError:
     _HAS_JSONSCHEMA = False
 
-from ..core.run import Run, ToolLimitExceededError
+from ..core.run import Run
 from .coerce import coerce_args
 from .policy import ToolPolicy, SideEffectLevel
 

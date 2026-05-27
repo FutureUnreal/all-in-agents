@@ -57,17 +57,17 @@ print(result["final_answer"])
 一切皆节点。流是节点组成的有向图。
 
 ```python
-from all_in_agents import BaseNode, Flow
+from all_in_agents import BaseNode, Flow, NodeContext
 
 class MyNode(BaseNode):
-    async def prep(self, shared: dict):
-        return shared["input"]
+    async def prep(self, ctx: NodeContext):
+        return ctx.state["input"]
 
-    async def exec(self, prep_result):
+    async def exec(self, prep_result, ctx: NodeContext):
         return prep_result.upper()
 
-    async def post(self, shared: dict, exec_result) -> str:
-        shared["output"] = exec_result
+    async def post(self, ctx: NodeContext, exec_result) -> str:
+        ctx.state["output"] = exec_result
         return "default"   # action name → next node
 
 node_a = MyNode()
@@ -76,25 +76,37 @@ node_a >> node_b           # default edge
 # or: (node_a - "custom_action") >> node_b
 
 flow = Flow()
-await flow.run(shared={}, start=node_a)
+await flow.run(ctx, start=node_a)  # ctx 是 RunContext
 ```
 
-**状态契约**：默认情况下 `Flow` 会在执行前浅拷贝 node，因此跨节点状态应该放在 `shared` 字典里。node 实例字段只建议保存配置。如果确实需要持久化 node 实例状态，可以使用 `Flow(copy_nodes=False)`。
+**状态约定**：node 执行会收到类型化的 `NodeContext`。跨节点运行状态应该放在 `ctx.state` 或 `ctx.run_context` 的类型化字段里；node 实例字段可以保存持久的节点局部状态。如果需要无状态的拷贝节点实例，可以使用 `Flow(copy_nodes=True)`。
 
-Flow 也支持生命周期 hooks 和条件节点：
+Flow 也支持生命周期 hooks、条件节点、子 Flow 和 Flow 级错误策略：
 
 ```python
-from all_in_agents import ConditionalNode, Flow, FlowHooks
+from all_in_agents import ConditionalNode, ErrorPolicy, Flow, FlowHooks, SubFlowNode
 
 hooks = FlowHooks(
-    on_node_start=lambda ctx: print("start", ctx["node_name"]),
-    on_node_end=lambda ctx: print("end", ctx["node_name"], ctx["action"]),
+    on_node_start=lambda ctx: print("start", ctx.node_name),
+    on_node_end=lambda ctx: print("end", ctx.node_name, ctx.action),
 )
 
-optional_node = ConditionalNode(node_a, lambda shared: shared.get("enabled", False))
-flow = Flow(hooks=hooks)
-await flow.run(shared={"enabled": True}, start=optional_node)
+optional_node = ConditionalNode(node_a, lambda ctx: ctx.state.get("enabled", False))
+subflow = SubFlowNode(start=node_b)
+optional_node >> subflow
+
+flow = Flow(
+    hooks=hooks,
+    error_policy=ErrorPolicy.retry(
+        max_attempts=3,
+        retry_exceptions=(TimeoutError,),
+        base_delay_ms=250,
+    ),
+)
+await flow.run(ctx, start=optional_node)
 ```
+
+如果 retry 行为属于某个节点而不是整个 Flow，可以在 `Node` 上使用 `RetryPolicy`。它支持按异常类型过滤、指数退避、jitter，以及来自模型供应商错误的 `retry_after_ms` 提示。
 
 ### 预算 & 循环检测
 
@@ -142,6 +154,23 @@ contract = ArtifactContract.json_files({
     }
 })
 ```
+
+`RunResult.status` 是粗粒度状态（`success`、`incomplete`、`error`、`budget_exhausted`、`interrupted`）。`RunResult.stop_reason` 是适合外层系统恢复用的机器可读原因，例如 `goal_met`、`artifact_missing`、`validation_failed`、`model_unavailable`、`budget_exhausted` 或 `loop_detected`。
+
+### Checkpoint & Resume
+
+Agent 每跑完一个 Flow 节点都可以写 checkpoint。后续进程可以用 run id 或 checkpoint 路径恢复同一个 Flow 图，并恢复 run/history/state 上下文。
+
+```python
+result = await agent.run("Long task", checkpoint=True)
+
+resumed = await agent.run(
+    "Long task",
+    resume_from=result.run_id,  # 或 result.checkpoint_path
+)
+```
+
+自定义 Flow 可以把 `JsonCheckpointStore` 传给 `Flow.run`。如果图里有多个同类节点并且需要跨进程恢复，建议给节点设置显式 `checkpoint_id`。
 
 ### 工具注册表
 
@@ -223,7 +252,7 @@ agent = Agent.quick(
 
 自定义压缩策略可以实现 `compact_turns(llm, turns, *, max_context_tokens, target_tokens=None)` 并返回 `CompactionResult`。
 
-`RunResult.events_path` 始终指向 NDJSON 事件日志。如果需要在内存中直接拿到紧凑轨迹用于评估或编排，可以用 `include_trajectory=True` 创建 Agent；返回的 `RunResult.trajectory` 会包含 assistant 消息、工具调用/结果、产物校验和运行结束事件。
+`RunResult.events_path` 始终指向 NDJSON 事件日志。如果需要在内存中直接拿到 trace 用于评估或编排，可以用 `include_trajectory=True` 创建 Agent；返回的 `RunResult.trace` 是类型化的 `RunTrace`，`RunResult.trajectory` 会返回紧凑列表视图。
 
 ### 事件存储
 
@@ -310,13 +339,23 @@ await llm.generate(
 ```
 all_in_agents/
 ├── core/
+│   ├── context.py   RunContext · NodeContext
+│   ├── checkpoint.py FlowCheckpoint · JsonCheckpointStore
 │   ├── node.py      BaseNode · Node · BatchNode · ConditionalNode
-│   ├── flow.py      Flow · FlowHooks (graph runner)
-│   └── run.py       Run · Budget · BudgetExceededError · LoopDetectedError
+│   ├── flow.py      Flow · FlowHooks
+│   ├── errors.py    ErrorPolicy · ErrorDecision
+│   ├── retry.py     RetryPolicy
+│   ├── subflow.py   SubFlowNode
+│   ├── budget.py    Budget · BudgetLedger
+│   ├── trace.py     TraceEvent · RunTrace
+│   └── run.py       Run · RunResult
 ├── adapters/
 │   ├── base.py      LLMAdapter · LLMResponse · ToolCall · GenerationOptions · LLMError · ConfigError
 │   ├── anthropic.py AnthropicAdapter (exponential backoff, retry)
-│   └── openai.py    OpenAIAdapter
+│   ├── openai.py    OpenAIAdapter (routing, lifecycle, retry)
+│   ├── openai_chat.py
+│   ├── openai_responses.py
+│   └── openai_utils.py
 ├── tools/
 │   ├── registry.py  ToolRegistry (approval callbacks, jsonschema validation)
 │   └── builtin.py   read_file · write_file · bash
@@ -325,7 +364,7 @@ all_in_agents/
 │   └── store.py     FileEventStore (append-only NDJSON)
 └── agents/
     ├── base.py      Agent · AgentConfig · Agent.quick()
-    ├── nodes.py     ReActNode · LLMCallNode · ToolDispatchNode
+    ├── nodes.py     LLMCallNode · ToolDispatchNode
     └── multi.py     MessageBus · TaskManager · MessageEnvelope · Task · TaskStatus
 ```
 

@@ -7,15 +7,13 @@ import time
 from pathlib import Path
 from typing import Any, Callable
 
+from ..core.trace import RunTrace, TraceEvent
 from ..utils import make_ulid as _make_ulid, iso_now as _iso_now
 
 _SNAPSHOT_EVERY_N = 50
 _SNAPSHOT_EVERY_MS = 30_000
 _SNAPSHOT_KEEP = 10
 _LOCK_TIMEOUT = 5.0
-
-SCHEMA_VERSION = "1"
-
 
 class FileEventStore:
     def __init__(
@@ -83,30 +81,28 @@ class FileEventStore:
         return d
 
     async def append(self, run_id: str, event_type: str, payload: dict) -> str:
-        event_id = _make_ulid()
-        event = {
-            "event_id": event_id,
-            "run_id": run_id,
-            "ts": _iso_now(),
-            "type": event_type,
-            "schema_version": SCHEMA_VERSION,
-            "payload": payload,
-        }
-        line = json.dumps(event, ensure_ascii=False)
+        event = TraceEvent(
+            event_id=_make_ulid(),
+            run_id=run_id,
+            ts=_iso_now(),
+            type=event_type,
+            payload=payload,
+        )
+        line = json.dumps(event.to_dict(), ensure_ascii=False)
         path = self.events_path(run_id)
         async with self._append_locks.setdefault(run_id, asyncio.Lock()):
             await asyncio.to_thread(self._append_to_file, path, line)
         self._event_counts[run_id] = self._event_counts.get(run_id, 0) + 1
         if self._on_event is not None:
             try:
-                cb_result = self._on_event(event)
+                cb_result = self._on_event(event.to_dict())
                 if asyncio.iscoroutine(cb_result):
                     await cb_result
             except Exception:
                 pass  # callback errors must not interrupt main flow
-        return event_id
+        return event.event_id
 
-    def _read_events(self, run_id: str, after_event_id: str | None = None) -> list[dict]:
+    def _read_event_dicts(self, run_id: str, after_event_id: str | None = None) -> list[dict]:
         path = self.events_path(run_id)
         if not path.exists():
             return []
@@ -128,43 +124,29 @@ class FileEventStore:
                 events.append(ev)
         return events
 
-    def read_events(self, run_id: str, after_event_id: str | None = None) -> list[dict]:
-        """Read raw NDJSON events for a run."""
+    def _read_events(self, run_id: str, after_event_id: str | None = None) -> list[TraceEvent]:
+        return [TraceEvent.from_dict(ev) for ev in self._read_event_dicts(run_id, after_event_id)]
+
+    def read_events(self, run_id: str, after_event_id: str | None = None) -> list[TraceEvent]:
+        """Read typed trace events for a run."""
         return self._read_events(run_id, after_event_id=after_event_id)
+
+    def build_trace(self, run_id: str) -> RunTrace:
+        return RunTrace(run_id=run_id, events=self._read_events(run_id))
 
     def build_trajectory(self, run_id: str) -> list[dict]:
         """Return a compact in-memory trajectory suitable for RunResult."""
-        event_types = {
-            "ASSISTANT_MESSAGE",
-            "TOOL_USE",
-            "TOOL_RESULT",
-            "TOOL_ABORTED",
-            "ARTIFACT_VALIDATION",
-            "RUN_STOPPED",
-            "RUN_ABORTED",
-        }
-        trajectory = []
-        for ev in self._read_events(run_id):
-            ev_type = ev.get("type")
-            if ev_type not in event_types:
-                continue
-            trajectory.append({
-                "event_id": ev.get("event_id", ""),
-                "ts": ev.get("ts", ""),
-                "type": ev_type,
-                **(ev.get("payload") or {}),
-            })
-        return trajectory
+        return self.build_trace(run_id).trajectory
 
     async def replay_all(self, run_id: str, reducer: Callable[[Any, dict], Any]) -> Any:
         state = None
-        for ev in self._read_events(run_id):
+        for ev in self._read_event_dicts(run_id):
             state = reducer(state, ev)
         return state
 
     async def save_snapshot(self, run_id: str, state: Any | None = None, last_event_id: str = "") -> None:
         if not last_event_id:
-            events = self._read_events(run_id)
+            events = self._read_event_dicts(run_id)
             last_event_id = events[-1]["event_id"] if events else "EMPTY"
 
         snap = {"last_event_id": last_event_id, "state": state}
@@ -206,7 +188,7 @@ class FileEventStore:
         if state is None and last_event_id is None:
             return await self.replay_all(run_id, reducer)
 
-        for ev in self._read_events(run_id, after_event_id=last_event_id):
+        for ev in self._read_event_dicts(run_id, after_event_id=last_event_id):
             state = reducer(state, ev)
         return state
 
@@ -214,7 +196,7 @@ class FileEventStore:
         count = self._event_counts.get(run_id)
         if count is None:
             # 冷启动兜底：一次性从文件计数并缓存
-            count = len(self._read_events(run_id))
+            count = len(self._read_event_dicts(run_id))
             self._event_counts[run_id] = count
         last_count, last_ts = self._last_snapshot.get(run_id, (0, 0))
         elapsed_ms = int(time.time() * 1000) - last_ts
@@ -307,7 +289,7 @@ class FileEventStore:
         reason: str = "process_interrupted",
         error_class: str | None = None,
     ) -> int:
-        events = self._read_events(run_id)
+        events = self._read_event_dicts(run_id)
         tool_uses: list[dict] = []
         closed_ids: set[str] = set()
         for ev in events:

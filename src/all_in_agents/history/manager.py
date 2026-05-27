@@ -229,3 +229,21 @@ class HistoryManager:
             msgs.append({"role": "assistant", "content": "Understood."})
         msgs.extend(_strip_internal(m) for m in self._messages)
         return msgs
+
+    def to_checkpoint(self) -> dict:
+        return {
+            "messages": self._messages,
+            "summary": self._summary,
+            "max_context_tokens": self.max_context_tokens,
+            "compress_threshold_tokens": self.compress_threshold_tokens,
+        }
+
+    def restore_checkpoint(self, data: dict) -> None:
+        self._messages = list(data.get("messages") or [])
+        self._summary = data.get("summary", "")
+        self.max_context_tokens = int(data.get("max_context_tokens", self.max_context_tokens) or self.max_context_tokens)
+        self.compress_threshold_tokens = int(
+            data.get("compress_threshold_tokens", self.compress_threshold_tokens)
+            or self.compress_threshold_tokens
+        )
+        self.__post_init__()

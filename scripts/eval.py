@@ -17,6 +17,7 @@ sys.path.insert(0, str(Path(__file__).parent.parent / "src"))
 
 from all_in_agents.adapters.base import LLMAdapter, LLMResponse, ToolCall
 from all_in_agents.agents.base import Agent
+from all_in_agents.core.run import RunResult
 from all_in_agents.tools.registry import Tool, ToolRegistry, ToolResponse, SideEffectLevel
 
 
@@ -95,7 +96,7 @@ def build_registry(case: dict) -> ToolRegistry:
 
         async def _execute(args: dict, run: Any, _responses=responses) -> ToolResponse:
             if not _responses:
-                return ToolResponse("error", f"[stub exhausted for tool]")
+                return ToolResponse("error", "[stub exhausted for tool]")
             raw = _responses.pop(0)
             return ToolResponse(
                 status=raw.get("status", "success"),
@@ -118,12 +119,12 @@ def build_registry(case: dict) -> ToolRegistry:
 # run_case
 # ---------------------------------------------------------------------------
 
-async def run_case(case: dict, work_dir: Path) -> tuple[dict, list[dict]]:
+async def run_case(case: dict, work_dir: Path) -> tuple[RunResult, list[dict]]:
     llm = ScriptedAdapter(case.get("llm_responses", []))
     tools = build_registry(case)
     agent = Agent(llm, tools, run_dir=str(work_dir))
 
-    shared = await agent.run(case["goal"])
+    result = await agent.run(case["goal"])
 
     # Find the events.ndjson written by the agent
     events: list[dict] = []
@@ -138,21 +139,21 @@ async def run_case(case: dict, work_dir: Path) -> tuple[dict, list[dict]]:
                         pass
         break  # only first file
 
-    return shared, events
+    return result, events
 
 
 # ---------------------------------------------------------------------------
 # assert_case
 # ---------------------------------------------------------------------------
 
-def assert_case(case: dict, shared: dict, events: list[dict]) -> list[str]:
+def assert_case(case: dict, result: RunResult, events: list[dict]) -> list[str]:
     assertions: dict = case.get("assertions", {})
     failures: list[str] = []
 
     # final_answer_contains
     if "final_answer_contains" in assertions:
         expected = assertions["final_answer_contains"]
-        actual = shared.get("final_answer", "")
+        actual = result.final_answer
         if expected not in actual:
             failures.append(
                 f"final_answer_contains: expected {expected!r} in {actual!r}"
@@ -192,7 +193,7 @@ def assert_case(case: dict, shared: dict, events: list[dict]) -> list[str]:
                 terminal_event = ev
                 break
         if terminal_event is None:
-            failures.append(f"stop_reason_prefix: no RUN_STOPPED or RUN_ABORTED event found")
+            failures.append("stop_reason_prefix: no RUN_STOPPED or RUN_ABORTED event found")
         else:
             reason = terminal_event.get("payload", {}).get("reason", "")
             if not reason.startswith(prefix):
@@ -224,12 +225,12 @@ async def main_async(argv=None) -> int:
         with tempfile.TemporaryDirectory() as tmp:
             work_dir = Path(tmp)
             try:
-                shared, events = await run_case(case, work_dir)
+                result, events = await run_case(case, work_dir)
             except Exception as e:
                 print(f"FAIL  {name}  [exception: {e}]")
                 continue
 
-        failures = assert_case(case, shared, events)
+        failures = assert_case(case, result, events)
         if failures:
             print(f"FAIL  {name}")
             for f in failures:

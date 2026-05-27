@@ -5,15 +5,40 @@ import hashlib
 import json
 from typing import TYPE_CHECKING, Any, Callable
 
+from ..core.context import NodeContext
 from ..core.node import BaseNode
-from ..core.run import Run
-from ..history.manager import HistoryManager
-from ..history.store import FileEventStore
 from ..utils import make_ulid as _make_ulid
 
 if TYPE_CHECKING:
-    from ..adapters.base import LLMAdapter, LLMResponse
-    from ..tools.registry import ToolRegistry
+    from ..adapters.base import LLMResponse
+
+
+def _coerce_llm_response(value: Any) -> "LLMResponse | None":
+    if value is None:
+        return None
+    if hasattr(value, "tool_calls"):
+        return value
+    if not isinstance(value, dict):
+        return None
+
+    from ..adapters.base import LLMResponse, ToolCall
+
+    tool_calls = [
+        ToolCall(
+            id=tc.get("id", ""),
+            name=tc.get("name", ""),
+            args=tc.get("args") or {},
+        )
+        for tc in value.get("tool_calls", []) or []
+        if isinstance(tc, dict)
+    ]
+    return LLMResponse(
+        content=value.get("content"),
+        tool_calls=tool_calls,
+        input_tokens=int(value.get("input_tokens", 0) or 0),
+        output_tokens=int(value.get("output_tokens", 0) or 0),
+        stop_reason=value.get("stop_reason", "end_turn"),
+    )
 
 
 def _tool_sig(name: str, args: dict) -> str:
@@ -22,127 +47,50 @@ def _tool_sig(name: str, args: dict) -> str:
     return f"{name}:{h}"
 
 
-# Deprecated: use LLMCallNode + ToolDispatchNode
-class ReActNode(BaseNode):
-    async def exec(self, prep: dict) -> "LLMResponse":
-        run: Run = prep["run"]
-        run.check_budget("llm_call")
-        return await prep["llm"].generate(
-            messages=prep["messages"],
-            tools=prep["tools"],
-            system=prep["system"],
-        )
-
-    async def prep(self, shared: dict) -> dict:
-        run: Run = shared["run"]
-        return {
-            "messages": shared["history"].get_messages(),
-            "tools": shared["tools"].get_schemas(policy=run.tool_policy),
-            "run": run,
-            "llm": shared["llm"],
-            "system": shared.get("system", ""),
-        }
-
-    async def post(self, shared: dict, resp: "LLMResponse") -> str:
-        run: Run = shared["run"]
-        store: FileEventStore = shared.get("store")
-        history: HistoryManager = shared["history"]
-        tools: "ToolRegistry" = shared["tools"]
-        turn_id = _make_ulid()
-
-        if store:
-            await store.append(run.run_id, "ASSISTANT_MESSAGE", {
-                "content": resp.content,
-                "tool_calls": [{"id": tc.id, "name": tc.name, "args": tc.args} for tc in resp.tool_calls],
-                "stop_reason": resp.stop_reason,
-            })
-
-        if resp.stop_reason == "end_turn" or not resp.tool_calls:
-            shared["final_answer"] = resp.content or ""
-            return "done"
-
-        history.add("assistant", resp.content or "")
-
-        for tc in resp.tool_calls:
-            run.check_budget("tool_call", _tool_sig(tc.name, tc.args))
-            if store:
-                await store.append_tool_use(run.run_id, turn_id=turn_id, tool_use_id=tc.id, name=tc.name, args=tc.args)
-            try:
-                result = await tools.execute(tc.name, tc.args, run)
-            except Exception as e:
-                if store:
-                    await store.append_tool_aborted(run.run_id, turn_id=turn_id, tool_use_id=tc.id, name=tc.name, reason=str(e), error_class=type(e).__name__)
-                raise
-
-            if store:
-                await store.append_tool_result(run.run_id, turn_id=turn_id, tool_use_id=tc.id, name=tc.name, status=result.status, content=result.content)
-
-            history.add_tool_result(tc.id, result)
-
-        if history.needs_compression():
-            await history.compress(shared.get("compression_llm", shared["llm"]))
-            if store:
-                await store.append(run.run_id, "MEMORY_UPDATED", {"summary": history._summary[:200]})
-
-        return "continue"
-
-
 class LLMCallNode(BaseNode):
-    async def prep(self, shared: dict) -> dict:
-        run: Run = shared["run"]
-        history: HistoryManager = shared["history"]
-        llm: "LLMAdapter" = shared["llm"]
+    async def prep(self, ctx: NodeContext) -> dict:
         max_tokens = None
-        if run.budget.max_input_tokens_per_call > 0:
-            max_tokens = min(llm.max_context_tokens, run.budget.max_input_tokens_per_call)
-        max_output_tokens = run.budget.max_output_tokens_per_call
+        if ctx.run.budget.max_input_tokens_per_call > 0:
+            max_tokens = min(ctx.llm.max_context_tokens, ctx.run.budget.max_input_tokens_per_call)
+        max_output_tokens = ctx.run.budget.max_output_tokens_per_call
         if max_output_tokens <= 0:
             max_output_tokens = 2048
         return {
-            "messages": history.get_messages(max_tokens=max_tokens),
-            "tools": shared["tools"].get_schemas(policy=run.tool_policy),
-            "run": run,
-            "llm": llm,
-            "system": shared.get("system", ""),
+            "messages": ctx.history.get_messages(max_tokens=max_tokens),
+            "tools": ctx.tools.get_schemas(policy=ctx.run.tool_policy),
             "max_output_tokens": max_output_tokens,
         }
 
-    async def exec(self, prep: dict) -> "LLMResponse":
-        run: Run = prep["run"]
-        run.check_budget("llm_call")
-        return await prep["llm"].generate(
+    async def exec(self, prep: dict, ctx: NodeContext) -> "LLMResponse":
+        ctx.run.check_budget("llm_call")
+        return await ctx.llm.generate(
             messages=prep["messages"],
             tools=prep["tools"],
-            system=prep["system"],
+            system=ctx.system,
             max_tokens=prep["max_output_tokens"],
         )
 
-    async def post(self, shared: dict, resp: "LLMResponse") -> str:
-        run: Run = shared["run"]
-        store: FileEventStore = shared.get("store")
-        history: HistoryManager = shared["history"]
-
-        run.record_llm_usage(
+    async def post(self, ctx: NodeContext, resp: "LLMResponse") -> str:
+        ctx.run.record_llm_usage(
             getattr(resp, "input_tokens", 0) or 0,
             getattr(resp, "output_tokens", 0) or 0,
         )
 
-        if store:
-            await store.append(run.run_id, "ASSISTANT_MESSAGE", {
+        if ctx.store:
+            await ctx.store.append(ctx.run.run_id, "ASSISTANT_MESSAGE", {
                 "content": resp.content,
                 "tool_calls": [{"id": tc.id, "name": tc.name, "args": tc.args} for tc in resp.tool_calls],
                 "stop_reason": resp.stop_reason,
             })
 
         if resp.stop_reason == "end_turn" or not resp.tool_calls:
-            shared["final_answer"] = resp.content or ""
+            ctx.final_answer = resp.content or ""
             return "done"
 
         turn_id = _make_ulid()
-        shared["turn_id"] = turn_id
-        # Write into shared (HC-5: Flow.copy causes node instance fields to not persist)
-        shared["llm_response"] = resp
-        history.add_assistant_tool_calls(resp.content or "" if resp.content else None, resp.tool_calls, turn_id=turn_id)
+        ctx.state["turn_id"] = turn_id
+        ctx.state["llm_response"] = resp
+        ctx.history.add_assistant_tool_calls(resp.content or "" if resp.content else None, resp.tool_calls, turn_id=turn_id)
         return "dispatch_tools"
 
 
@@ -152,32 +100,26 @@ class ToolDispatchNode(BaseNode):
         self.max_concurrency = max_concurrency
         self.on_tool_result = on_tool_result
 
-    async def prep(self, shared: dict) -> "LLMResponse | None":
-        return shared.get("llm_response")
+    async def prep(self, ctx: NodeContext) -> "LLMResponse | None":
+        return _coerce_llm_response(ctx.state.get("llm_response"))
 
-    async def exec(self, resp: "LLMResponse | None") -> "LLMResponse | None":
-        # exec cannot access shared; tool execution must happen in post
+    async def exec(self, resp: "LLMResponse | None", ctx: NodeContext) -> "LLMResponse | None":
         return resp
 
-    async def post(self, shared: dict, resp: "LLMResponse | None") -> str:
+    async def post(self, ctx: NodeContext, resp: "LLMResponse | None") -> str:
         if resp is None:
-            shared["final_answer"] = shared.get("final_answer", "")
             return "done"
 
-        run: Run = shared["run"]
-        store: FileEventStore = shared.get("store")
-        history: HistoryManager = shared["history"]
-        tools: "ToolRegistry" = shared["tools"]
-        turn_id: str = shared.get("turn_id") or _make_ulid()
+        turn_id: str = ctx.state.get("turn_id") or _make_ulid()
 
         from ..tools.policy import SideEffectLevel
 
         # Write TOOL_USE events for all tool calls first
         for tc in resp.tool_calls:
-            run.check_budget("tool_call", _tool_sig(tc.name, tc.args))
-            if store:
-                await store.append_tool_use(
-                    run.run_id, turn_id=turn_id,
+            ctx.run.check_budget("tool_call", _tool_sig(tc.name, tc.args))
+            if ctx.store:
+                await ctx.store.append_tool_use(
+                    ctx.run.run_id, turn_id=turn_id,
                     tool_use_id=tc.id, name=tc.name, args=tc.args,
                 )
 
@@ -185,7 +127,7 @@ class ToolDispatchNode(BaseNode):
         concurrent_safe = []
         sequential = []
         for tc in resp.tool_calls:
-            tool = tools.get_tool(tc.name)
+            tool = ctx.tools.get_tool(tc.name)
             level = tool.side_effect_level if tool else SideEffectLevel.DANGEROUS
             if level in (SideEffectLevel.READ_ONLY, SideEffectLevel.NETWORK):
                 concurrent_safe.append(tc)
@@ -202,7 +144,7 @@ class ToolDispatchNode(BaseNode):
             async def _run_one(tc):
                 async with sem:
                     try:
-                        return tc.id, await tools.execute(tc.name, tc.args, run)
+                        return tc.id, await ctx.tools.execute(tc.name, tc.args, ctx.run)
                     except Exception as e:
                         return tc.id, e
 
@@ -213,7 +155,7 @@ class ToolDispatchNode(BaseNode):
         # Execute sequential tools one by one
         for tc in sequential:
             try:
-                results[tc.id] = await tools.execute(tc.name, tc.args, run)
+                results[tc.id] = await ctx.tools.execute(tc.name, tc.args, ctx.run)
             except Exception as e:
                 results[tc.id] = e
 
@@ -221,9 +163,9 @@ class ToolDispatchNode(BaseNode):
         for tc in resp.tool_calls:
             result = results.get(tc.id)
             if isinstance(result, Exception):
-                if store:
-                    await store.append_tool_aborted(
-                        run.run_id, turn_id=turn_id, tool_use_id=tc.id,
+                if ctx.store:
+                    await ctx.store.append_tool_aborted(
+                        ctx.run.run_id, turn_id=turn_id, tool_use_id=tc.id,
                         name=tc.name, reason=str(result), error_class=type(result).__name__,
                     )
                 # Synthesize an error ToolResponse so history stays consistent
@@ -231,16 +173,16 @@ class ToolDispatchNode(BaseNode):
                 result = ToolResponse("error", str(result), type(result).__name__)
             else:
                 # Redact if configured
-                if store:
-                    result = store.redact_tool_response(tc.name, result)
-                if store:
-                    await store.append_tool_result(
-                        run.run_id, turn_id=turn_id, tool_use_id=tc.id,
+                if ctx.store:
+                    result = ctx.store.redact_tool_response(tc.name, result)
+                if ctx.store:
+                    await ctx.store.append_tool_result(
+                        ctx.run.run_id, turn_id=turn_id, tool_use_id=tc.id,
                         name=tc.name, status=result.status, content=result.content,
                     )
-                run.record_tool_result(tc.name, result.status)
+                ctx.run.record_tool_result(tc.name, result.status)
 
-            history.add_tool_result(tc.id, result, turn_id=turn_id)
+            ctx.history.add_tool_result(tc.id, result, turn_id=turn_id)
 
             if self.on_tool_result is not None:
                 try:
@@ -250,10 +192,12 @@ class ToolDispatchNode(BaseNode):
                 except Exception:
                     pass  # callback errors must not interrupt main flow
 
-        if history.needs_compression():
-            await history.compress(shared.get("compression_llm", shared["llm"]))
-            run.record_compression()
-            if store:
-                await store.append(run.run_id, "MEMORY_UPDATED", {"summary": history._summary[:200]})
+        if ctx.history.needs_compression():
+            await ctx.history.compress(ctx.run_context.effective_compression_llm)
+            ctx.run.record_compression()
+            if ctx.store:
+                await ctx.store.append(ctx.run.run_id, "MEMORY_UPDATED", {"summary": ctx.history._summary[:200]})
 
+        ctx.state.pop("llm_response", None)
+        ctx.state.pop("turn_id", None)
         return "continue"

@@ -1,22 +1,26 @@
 from __future__ import annotations
 
-from dataclasses import dataclass, field
+from dataclasses import dataclass
 from typing import TYPE_CHECKING, Callable, Any, Iterable
 
+from ..core.context import RunContext
+from ..core.checkpoint import FlowCheckpoint, JsonCheckpointStore
+from ..core.errors import ErrorPolicy
 from ..core.flow import Flow, FlowHooks
 from ..core.artifacts import ArtifactContract
-from ..core.run import BudgetExceededError, Budget, LoopDetectedError, Run, RunResult, RunStatus, StopReason
-from ..adapters.base import GenerationOptions
+from ..core.budget import Budget, BudgetExceededError, LoopDetectedError
+from ..core.run import Run, RunResult, RunStatus, StopReason
+from ..adapters.base import GenerationOptions, LLMError
 from ..history.manager import HistoryManager
 from ..history.store import FileEventStore
 from ..tools.policy import ToolPolicy
 from ..history.compactor import CompactionStrategy
 from ..agents.harness import build_system_prompt
-from ..agents.nodes import LLMCallNode, ReActNode, ToolDispatchNode
+from ..agents.nodes import LLMCallNode, ToolDispatchNode
 from ..utils import make_ulid as _make_ulid, iso_now as _iso_now
 
 if TYPE_CHECKING:
-    from ..adapters.base import LLMAdapter, LLMResponse
+    from ..adapters.base import LLMAdapter
     from ..tools.registry import ToolRegistry
 
 
@@ -45,7 +49,8 @@ class AgentConfig:
     on_tool_result: Callable[[dict], Any] | None = None
     on_event: Callable[[dict], Any] | None = None
     flow_hooks: FlowHooks | None = None
-    flow_copy_nodes: bool = True
+    flow_error_policy: ErrorPolicy | None = None
+    flow_copy_nodes: bool = False
     include_trajectory: bool = False
     workspace_root: str | None = None
     inject_project_context: bool = False
@@ -53,6 +58,7 @@ class AgentConfig:
     skills: Iterable[str] | str | None = None
     redact_tool_result: Callable[[str, Any], Any] | None = None
     tool_max_concurrency: int = 4
+    checkpoint_dir: str | None = None
 
 
 class Agent:
@@ -73,7 +79,8 @@ class Agent:
         on_tool_result: Callable[[dict], Any] | None = None,
         on_event: Callable[[dict], Any] | None = None,
         flow_hooks: FlowHooks | None = None,
-        flow_copy_nodes: bool = True,
+        flow_error_policy: ErrorPolicy | None = None,
+        flow_copy_nodes: bool = False,
         include_trajectory: bool = False,
         workspace_root: str | None = None,
         inject_project_context: bool = False,
@@ -81,6 +88,7 @@ class Agent:
         skills: Iterable[str] | str | None = None,
         redact_tool_result: Callable[[str, Any], Any] | None = None,
         tool_max_concurrency: int = 4,
+        checkpoint_dir: str | None = None,
     ):
         if config is not None:
             budget = budget if budget is not None else config.budget
@@ -98,7 +106,8 @@ class Agent:
             on_tool_result = on_tool_result if on_tool_result is not None else config.on_tool_result
             on_event = on_event if on_event is not None else config.on_event
             flow_hooks = flow_hooks if flow_hooks is not None else config.flow_hooks
-            flow_copy_nodes = flow_copy_nodes if flow_copy_nodes is not True else config.flow_copy_nodes
+            flow_error_policy = flow_error_policy if flow_error_policy is not None else config.flow_error_policy
+            flow_copy_nodes = flow_copy_nodes if flow_copy_nodes is not False else config.flow_copy_nodes
             include_trajectory = include_trajectory or config.include_trajectory
             workspace_root = workspace_root if workspace_root is not None else config.workspace_root
             inject_project_context = inject_project_context or config.inject_project_context
@@ -108,6 +117,7 @@ class Agent:
             tool_max_concurrency = (
                 tool_max_concurrency if tool_max_concurrency != 4 else config.tool_max_concurrency
             )
+            checkpoint_dir = checkpoint_dir if checkpoint_dir is not None else config.checkpoint_dir
 
         self._llm = llm
         self._tools = tools
@@ -128,7 +138,8 @@ class Agent:
         self._skills = skills
         self._redact_tool_result = redact_tool_result
         self._tool_max_concurrency = tool_max_concurrency
-        self._flow = Flow(hooks=flow_hooks, copy_nodes=flow_copy_nodes)
+        self._checkpoint_dir = checkpoint_dir
+        self._flow = Flow(hooks=flow_hooks, error_policy=flow_error_policy, copy_nodes=flow_copy_nodes)
 
         # Decomposed nodes
         self._llm_node = LLMCallNode()
@@ -231,7 +242,24 @@ class Agent:
             **kwargs,
         )
 
-    async def run(self, goal: str) -> RunResult:
+    async def run(
+        self,
+        goal: str,
+        *,
+        parent_run: Run | None = None,
+        checkpoint: bool = False,
+        resume_from: str | None = None,
+    ) -> RunResult:
+        checkpoint_enabled = checkpoint or resume_from is not None
+        checkpoint_store = (
+            JsonCheckpointStore(self._checkpoint_dir or self._run_dir)
+            if checkpoint_enabled
+            else None
+        )
+        resume_checkpoint: FlowCheckpoint | None = None
+        if resume_from is not None:
+            resume_checkpoint = checkpoint_store.load(resume_from)
+
         system = self._system
         if self._inject_project_context or self._skills is not None:
             include_all_skills, skill_names = _normalize_skill_selection(self._skills)
@@ -243,12 +271,33 @@ class Agent:
                 skill_names=skill_names,
             )
 
-        run = Run(
-            run_id=_make_ulid(), goal=goal, budget=self._budget,
-            created_at=_iso_now(),
-            workspace_root=self._workspace_root,
-            tool_policy=self._tool_policy,
-        )
+        effective_goal = goal
+        if resume_checkpoint is not None:
+            effective_goal = (
+                (resume_checkpoint.context.get("run") or {}).get("goal")
+                or goal
+            )
+
+        run_id = resume_checkpoint.run_id if resume_checkpoint is not None else _make_ulid()
+        created_at = _iso_now()
+        if parent_run is not None:
+            run = parent_run.spawn_child(
+                run_id=run_id,
+                goal=effective_goal,
+                budget=self._budget,
+                created_at=created_at,
+                workspace_root=self._workspace_root,
+                tool_policy=self._tool_policy,
+            )
+        else:
+            run = Run(
+                run_id=run_id,
+                goal=effective_goal,
+                budget=self._budget,
+                created_at=created_at,
+                workspace_root=self._workspace_root,
+                tool_policy=self._tool_policy,
+            )
         store = FileEventStore(self._run_dir, redact_tool_result=self._redact_tool_result)
         if self._on_event is not None:
             store._on_event = self._on_event
@@ -258,9 +307,6 @@ class Agent:
             compress_threshold_tokens=self._history_compress_threshold_tokens,
         )
 
-        await store.append(run.run_id, "RUN_CREATED", {"goal": goal})
-        history.add("user", goal)
-
         # Reconfigure ToolDispatchNode with current settings
         self._tool_node = ToolDispatchNode(
             max_concurrency=self._tool_max_concurrency,
@@ -269,20 +315,43 @@ class Agent:
         self._llm_node - "dispatch_tools" >> self._tool_node
         self._tool_node - "continue" >> self._llm_node
 
-        shared: dict = {
-            "run": run, "llm": self._llm, "tools": self._tools,
-            "compression_llm": self._compression_llm or self._llm,
-            "history": history, "store": store, "system": system,
-            "final_answer": "",
-        }
+        ctx = RunContext(
+            run=run,
+            llm=self._llm,
+            tools=self._tools,
+            history=history,
+            store=store,
+            system=system,
+            compression_llm=self._compression_llm,
+        )
+
+        if resume_checkpoint is not None:
+            await store.append(run.run_id, "RUN_RESUMED", {
+                "next_node_id": resume_checkpoint.next_node_id,
+                "step_index": resume_checkpoint.step_index,
+            })
+        else:
+            await store.append(run.run_id, "RUN_CREATED", {"goal": effective_goal})
+            history.add("user", effective_goal)
 
         close_reason = "goal_met"
         close_error_class: str | None = None
         artifact_validation: dict | None = None
+        flow_completed = False
+        checkpoint_path = (
+            str(checkpoint_store.checkpoint_path(run.run_id))
+            if checkpoint_store is not None
+            else ""
+        )
         try:
-            await self._flow.run(shared, self._llm_node)
+            await self._flow.run(
+                ctx,
+                self._llm_node,
+                checkpoint_store=checkpoint_store,
+                resume_checkpoint=resume_checkpoint,
+            )
         except (BudgetExceededError, LoopDetectedError) as e:
-            shared["final_answer"] = shared.get("final_answer") or f"[stopped: {e}]"
+            ctx.final_answer = ctx.final_answer or f"[stopped: {e}]"
             close_reason = str(e)
             if isinstance(e, BudgetExceededError):
                 run.finalize(StopReason.BUDGET_EXHAUSTED.value, RunStatus.BUDGET_EXHAUSTED)
@@ -290,11 +359,21 @@ class Agent:
                 run.finalize(StopReason.LOOP_DETECTED.value, RunStatus.INCOMPLETE)
             await store.append(run.run_id, "RUN_STOPPED", {"reason": str(e), "metrics": run.snapshot_metrics()})
         except Exception as e:
-            shared["final_answer"] = shared.get("final_answer") or f"[aborted: {e}]"
+            ctx.final_answer = ctx.final_answer or f"[aborted: {e}]"
             close_reason = str(e)
             close_error_class = type(e).__name__
-            run.finalize(f"{StopReason.ABORTED.value}:{type(e).__name__}", RunStatus.ERROR)
-            await store.append_run_aborted(run.run_id, reason=str(e), error_class=type(e).__name__, metrics=run.snapshot_metrics())
+            stop_reason = (
+                StopReason.MODEL_UNAVAILABLE.value
+                if isinstance(e, LLMError)
+                else f"{StopReason.ABORTED.value}:{type(e).__name__}"
+            )
+            run.finalize(stop_reason, RunStatus.ERROR)
+            await store.append_run_aborted(
+                run.run_id,
+                reason=str(e),
+                error_class=type(e).__name__,
+                metrics=run.snapshot_metrics(),
+            )
         else:
             run.finalize(StopReason.GOAL_MET.value, RunStatus.SUCCESS)
             if self._artifact_contract is not None:
@@ -307,26 +386,48 @@ class Agent:
                         reason = StopReason.VALIDATION_FAILED.value
                     run.finalize(reason, RunStatus.INCOMPLETE)
             await store.append(run.run_id, "RUN_STOPPED", {"reason": run.stop_reason, "metrics": run.snapshot_metrics()})
+            flow_completed = True
         finally:
             try:
                 await store.close_open_tool_uses(run.run_id, reason=close_reason, error_class=close_error_class)
             except Exception:
                 pass
 
-        trajectory = store.build_trajectory(run.run_id) if self._include_trajectory else None
+        if checkpoint_store is not None and flow_completed:
+            try:
+                existing = checkpoint_store.load(run.run_id)
+                step_index = existing.step_index
+            except Exception:
+                step_index = resume_checkpoint.step_index if resume_checkpoint is not None else 0
+            checkpoint_path = checkpoint_store.save(FlowCheckpoint.capture(
+                ctx,
+                next_node_id=None,
+                step_index=step_index,
+                status=run.status,
+            ))
+
+        trace = store.build_trace(run.run_id) if self._include_trajectory else None
 
         return RunResult(
-            final_answer=shared.get("final_answer", ""),
+            final_answer=ctx.final_answer,
             run_id=run.run_id,
             stop_reason=run.stop_reason,
             metrics=run.snapshot_metrics(),
             events_path=str(store.events_path(run.run_id)),
             status=run.status,
             artifact_validation=artifact_validation,
-            trajectory=trajectory,
+            trace=trace,
+            checkpoint_path=checkpoint_path,
         )
 
-    def run_sync(self, goal: str) -> RunResult:
+    def run_sync(
+        self,
+        goal: str,
+        *,
+        parent_run: Run | None = None,
+        checkpoint: bool = False,
+        resume_from: str | None = None,
+    ) -> RunResult:
         import asyncio
         try:
             loop = asyncio.get_running_loop()
@@ -337,4 +438,11 @@ class Agent:
                 "A running event loop was detected (e.g. Jupyter Notebook or an async framework). "
                 "Use `await agent.run(goal)` instead of `agent.run_sync(goal)`."
             )
-        return asyncio.run(self.run(goal))
+        return asyncio.run(
+            self.run(
+                goal,
+                parent_run=parent_run,
+                checkpoint=checkpoint,
+                resume_from=resume_from,
+            )
+        )
