@@ -4,7 +4,7 @@ build-backend = "hatchling.build"
 
 [project]
 name = "all-in-agents"
-version = "0.2.8"
+version = "0.2.9"
 description = "A minimal, universal agent framework. Zero mandatory dependencies."
 readme = "README.md"
 license = { text = "MIT" }
@@ -15,7 +15,8 @@ dependencies = []
 anthropic = ["anthropic>=0.40.0"]
 openai    = ["openai>=1.0.0"]
 jsonschema = ["jsonschema>=4.0.0"]
-all = ["anthropic>=0.40.0", "openai>=1.0.0", "jsonschema>=4.0.0"]
+mcp = ["mcp>=1.12.4"]
+all = ["anthropic>=0.40.0", "openai>=1.0.0", "jsonschema>=4.0.0", "mcp>=1.12.4"]
 
 [project.urls]
 Homepage   = "https://github.com/FutureUnreal/all-in-agents"

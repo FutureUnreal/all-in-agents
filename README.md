@@ -19,6 +19,7 @@
 pip install all-in-agents
 pip install "all-in-agents[openai]"      # OpenAI GPT
 pip install "all-in-agents[anthropic]"   # Anthropic Claude
+pip install "all-in-agents[mcp]"         # MCP tool providers
 pip install "all-in-agents[all]"         # all optional deps
 ```
 
@@ -220,6 +221,45 @@ registry.register(Tool(
 
 `DANGEROUS` and `WRITES_LOCAL` tools call `approval_callback` before executing. By default, the callback denies all requests (safe by default). Use `unsafe_defaults()` for development or provide your own callback. Install `jsonschema` for automatic argument validation with type coercion.
 
+### MCP Tools
+
+MCP support is optional. Install `all-in-agents[mcp]`, connect to a stdio, SSE, or Streamable HTTP MCP server, and register its tools into the normal `ToolRegistry`.
+
+```python
+from all_in_agents import (
+    MCPToolProvider,
+    SSEMCPServer,
+    StdioMCPServer,
+    StreamableHTTPMCPServer,
+    ToolRegistry,
+)
+
+registry = ToolRegistry()
+provider = MCPToolProvider(
+    StdioMCPServer(
+        command="uv",
+        args=("run", "mcp-server-fetch"),
+    ),
+    name_prefix="mcp_",
+)
+
+await provider.register_tools(registry)
+
+remote_provider = MCPToolProvider(
+    StreamableHTTPMCPServer(
+        url="http://localhost:8000/mcp",
+        headers={"Authorization": "Bearer token"},
+    ),
+    name_prefix="remote_",
+)
+
+legacy_provider = MCPToolProvider(SSEMCPServer(url="http://localhost:8000/sse"))
+```
+
+Remote MCP tools default to `SideEffectLevel.DANGEROUS`, so the registry approval flow still protects execution. For a trusted server, pass a narrower `side_effect_level` such as `SideEffectLevel.NETWORK` or `SideEffectLevel.READ_ONLY`.
+
+`MCPToolProvider` is a client-side bridge. It can connect to servers built with FastMCP or any other MCP-compliant server, but MCP stays out of the core runtime.
+
 ### Skills
 
 Project skills are prompt bundles stored as `SKILL.md` files:
@@ -382,7 +422,8 @@ all_in_agents/
 │   ├── registry.py  ToolRegistry (safe-by-default, approval callbacks, jsonschema)
 │   ├── policy.py    ToolPolicy · SideEffectLevel
 │   ├── coerce.py    Schema-driven argument type coercion
-│   └── builtin.py   read_file · write_file · bash · list_files · text_search
+│   ├── builtin.py   read_file · write_file · bash · list_files · text_search
+│   └── mcp.py       MCPToolProvider · stdio/SSE/Streamable HTTP transports
 ├── history/
 │   ├── manager.py   HistoryManager (dynamic threshold, LLM-based compression)
 │   ├── compactor.py HistoryCompactor (micro-compact + summarize + fallback)

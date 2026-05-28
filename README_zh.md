@@ -19,6 +19,7 @@
 pip install all-in-agents
 pip install "all-in-agents[openai]"      # OpenAI GPT
 pip install "all-in-agents[anthropic]"   # Anthropic Claude
+pip install "all-in-agents[mcp]"         # MCP tool providers
 pip install "all-in-agents[all]"         # 安装所有可选依赖
 ```
 
@@ -199,6 +200,45 @@ registry.register(Tool(
 
 `DANGEROUS` 级别的工具在执行前会调用 `approval_callback`。安装 `jsonschema` 可启用自动参数校验。
 
+### MCP 工具
+
+MCP 是可选能力。安装 `all-in-agents[mcp]` 后，可以连接 stdio、SSE 或 Streamable HTTP MCP server，并把远端工具注册到普通 `ToolRegistry`。
+
+```python
+from all_in_agents import (
+    MCPToolProvider,
+    SSEMCPServer,
+    StdioMCPServer,
+    StreamableHTTPMCPServer,
+    ToolRegistry,
+)
+
+registry = ToolRegistry()
+provider = MCPToolProvider(
+    StdioMCPServer(
+        command="uv",
+        args=("run", "mcp-server-fetch"),
+    ),
+    name_prefix="mcp_",
+)
+
+await provider.register_tools(registry)
+
+remote_provider = MCPToolProvider(
+    StreamableHTTPMCPServer(
+        url="http://localhost:8000/mcp",
+        headers={"Authorization": "Bearer token"},
+    ),
+    name_prefix="remote_",
+)
+
+legacy_provider = MCPToolProvider(SSEMCPServer(url="http://localhost:8000/sse"))
+```
+
+远端 MCP 工具默认按 `SideEffectLevel.DANGEROUS` 注册，执行前仍会走 registry 的审批流程。可信 server 可以显式传入更窄的 `side_effect_level`，例如 `SideEffectLevel.NETWORK` 或 `SideEffectLevel.READ_ONLY`。
+
+`MCPToolProvider` 是客户端桥接层。它可以连接 FastMCP 或其他符合 MCP 协议的 server，但 MCP 依然不会进入核心 runtime。
+
 ### Skills
 
 项目 skill 是放在 `SKILL.md` 中的提示词包：
@@ -358,7 +398,8 @@ all_in_agents/
 │   └── openai_utils.py
 ├── tools/
 │   ├── registry.py  ToolRegistry (approval callbacks, jsonschema validation)
-│   └── builtin.py   read_file · write_file · bash
+│   ├── builtin.py   read_file · write_file · bash
+│   └── mcp.py       MCPToolProvider · stdio/SSE/Streamable HTTP transports
 ├── history/
 │   ├── manager.py   HistoryManager (LLM-based compression)
 │   └── store.py     FileEventStore (append-only NDJSON)

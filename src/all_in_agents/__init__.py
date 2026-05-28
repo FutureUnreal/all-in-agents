@@ -10,7 +10,11 @@ from .adapters import (
     LLMAdapter, LLMResponse, ToolCall, GenerationOptions, ConfigError, LLMError,
     AnthropicAdapter, OpenAIAdapter, ErrorClass,
 )
-from .tools import Tool, ToolRegistry, ToolResponse, SideEffectLevel, BUILTIN_TOOLS
+from .tools import (
+    Tool, ToolRegistry, ToolResponse, SideEffectLevel, BUILTIN_TOOLS,
+    MCPServerConfig, MCPToolProvider,
+    SSEMCPServer, StdioMCPServer, StreamableHTTPMCPServer,
+)
 from .tools.policy import ToolPolicy
 from .tools.registry import unsafe_defaults
 from .tools.coerce import coerce_args
@@ -36,6 +40,8 @@ __all__ = [
     "AnthropicAdapter", "OpenAIAdapter", "ErrorClass",
     # Tools
     "Tool", "ToolRegistry", "ToolResponse", "SideEffectLevel", "BUILTIN_TOOLS",
+    "MCPToolProvider", "MCPServerConfig",
+    "StdioMCPServer", "SSEMCPServer", "StreamableHTTPMCPServer",
     "ToolPolicy", "unsafe_defaults", "coerce_args",
     # History
     "HistoryManager", "FileEventStore", "CompactionStrategy", "HistoryCompactor", "CompactionResult",
