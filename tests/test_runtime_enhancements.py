@@ -163,6 +163,60 @@ class FinishLLM(LLMAdapter):
         )
 
 
+class NoToolThenToolLLM(LLMAdapter):
+    model_id = "no-tool-then-tool"
+    max_context_tokens = 1000
+
+    def __init__(self):
+        self.calls = 0
+        self.messages = []
+
+    async def generate(self, messages, tools=None, system="", max_tokens=2048, options=None):
+        self.calls += 1
+        self.messages.append(messages)
+        if self.calls == 1:
+            return LLMResponse(
+                content="text-only answer",
+                tool_calls=[],
+                input_tokens=1,
+                output_tokens=1,
+                stop_reason="end_turn",
+            )
+        if self.calls == 2:
+            return LLMResponse(
+                content="calling tool",
+                tool_calls=[ToolCall(id="tool_1", name="echo", args={"text": "hi"})],
+                input_tokens=1,
+                output_tokens=1,
+                stop_reason="tool_use",
+            )
+        return LLMResponse(
+            content="done",
+            tool_calls=[],
+            input_tokens=1,
+            output_tokens=1,
+            stop_reason="end_turn",
+        )
+
+
+class AlwaysNoToolLLM(LLMAdapter):
+    model_id = "always-no-tool"
+    max_context_tokens = 1000
+
+    def __init__(self):
+        self.calls = 0
+
+    async def generate(self, messages, tools=None, system="", max_tokens=2048, options=None):
+        self.calls += 1
+        return LLMResponse(
+            content=f"text-only answer {self.calls}",
+            tool_calls=[],
+            input_tokens=1,
+            output_tokens=1,
+            stop_reason="end_turn",
+        )
+
+
 class StreamingLLM(LLMAdapter):
     model_id = "streaming"
     max_context_tokens = 1000
@@ -515,6 +569,75 @@ class RuntimeEnhancementTests(unittest.IsolatedAsyncioTestCase):
         event_types = [event["type"] for event in result.trajectory]
         self.assertIn("CONTROL_DECISION", event_types)
         self.assertNotIn("TOOL_USE", event_types)
+
+    async def test_agent_turn_gate_can_retry_with_injected_message(self):
+        llm = NoToolThenToolLLM()
+        seen_metrics = []
+
+        def gate(turn):
+            seen_metrics.append(turn.metrics.copy())
+            if turn.metrics["tool_calls"] == 0 and not turn.response.tool_calls:
+                return AgentTurnDecision.retry(
+                    "Use tools before giving the final answer.",
+                    max_retries=2,
+                )
+            return AgentTurnDecision.continue_()
+
+        with tempfile.TemporaryDirectory() as tmp:
+            agent = Agent(
+                llm,
+                make_registry(),
+                run_dir=tmp,
+                on_turn=gate,
+                include_trajectory=True,
+            )
+            result = await agent.run("use the tool")
+
+        self.assertEqual(result.final_answer, "done")
+        self.assertEqual(result.status, "success")
+        self.assertEqual(llm.calls, 3)
+        self.assertEqual(result.metrics["tool_calls"], 1)
+        self.assertEqual(seen_metrics[0]["llm_calls"], 1)
+        self.assertEqual(seen_metrics[0]["tool_calls"], 0)
+        self.assertEqual(
+            llm.messages[1][-1]["content"],
+            "Use tools before giving the final answer.",
+        )
+        event_types = [event["type"] for event in result.trajectory]
+        self.assertIn("ASSISTANT_REJECTED", event_types)
+        self.assertIn("CONTROL_DECISION", event_types)
+        self.assertIn("TOOL_USE", event_types)
+
+    async def test_agent_turn_gate_retry_limit_stops_run(self):
+        llm = AlwaysNoToolLLM()
+
+        def gate(turn):
+            return AgentTurnDecision.retry(
+                "Use tools before giving the final answer.",
+                max_retries=1,
+            )
+
+        with tempfile.TemporaryDirectory() as tmp:
+            agent = Agent(
+                llm,
+                make_registry(),
+                run_dir=tmp,
+                on_turn=gate,
+                include_trajectory=True,
+            )
+            result = await agent.run("use the tool")
+
+        self.assertEqual(llm.calls, 2)
+        self.assertEqual(result.status, "incomplete")
+        self.assertEqual(result.stop_reason, "turn_retry_exhausted")
+        self.assertNotIn("TOOL_USE", [event["type"] for event in result.trajectory])
+        control_events = [
+            event for event in result.trajectory
+            if event["type"] == "CONTROL_DECISION"
+        ]
+        self.assertEqual(control_events[-1]["action"], "stop")
+        self.assertEqual(control_events[-1]["requested_action"], "retry")
+        self.assertEqual(control_events[-1]["retry_count"], 1)
 
 
 if __name__ == "__main__":

@@ -27,6 +27,7 @@ class RunContext:
     compression_llm: "LLMAdapter | None" = None
     stream_callback: Callable[[Any], Any] | None = None
     on_turn: Callable[[Any], Any] | None = None
+    turn_max_retries: int = 3
     final_answer: str = ""
     state: dict[str, Any] = field(default_factory=dict)
 

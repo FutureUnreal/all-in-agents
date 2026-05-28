@@ -51,6 +51,7 @@ class AgentConfig:
     on_tool_result: Callable[[dict], Any] | None = None
     on_event: Callable[[dict], Any] | None = None
     on_turn: Callable[[Any], Any] | None = None
+    turn_max_retries: int = 3
     flow_hooks: FlowHooks | None = None
     flow_error_policy: ErrorPolicy | None = None
     flow_copy_nodes: bool = False
@@ -82,6 +83,7 @@ class Agent(AgentStreamingMixin):
         on_tool_result: Callable[[dict], Any] | None = None,
         on_event: Callable[[dict], Any] | None = None,
         on_turn: Callable[[Any], Any] | None = None,
+        turn_max_retries: int = 3,
         flow_hooks: FlowHooks | None = None,
         flow_error_policy: ErrorPolicy | None = None,
         flow_copy_nodes: bool = False,
@@ -110,6 +112,9 @@ class Agent(AgentStreamingMixin):
             on_tool_result = on_tool_result if on_tool_result is not None else config.on_tool_result
             on_event = on_event if on_event is not None else config.on_event
             on_turn = on_turn if on_turn is not None else config.on_turn
+            turn_max_retries = (
+                turn_max_retries if turn_max_retries != 3 else config.turn_max_retries
+            )
             flow_hooks = flow_hooks if flow_hooks is not None else config.flow_hooks
             flow_error_policy = flow_error_policy if flow_error_policy is not None else config.flow_error_policy
             flow_copy_nodes = flow_copy_nodes if flow_copy_nodes is not False else config.flow_copy_nodes
@@ -124,6 +129,9 @@ class Agent(AgentStreamingMixin):
             )
             checkpoint_dir = checkpoint_dir if checkpoint_dir is not None else config.checkpoint_dir
 
+        if turn_max_retries < 0:
+            raise ValueError("turn_max_retries must be >= 0")
+
         self._llm = llm
         self._tools = tools
         self._budget = budget or Budget()
@@ -137,6 +145,7 @@ class Agent(AgentStreamingMixin):
         self._on_tool_result = on_tool_result
         self._on_event = on_event
         self._on_turn = on_turn
+        self._turn_max_retries = turn_max_retries
         self._include_trajectory = include_trajectory
         self._workspace_root = workspace_root
         self._inject_project_context = inject_project_context
@@ -154,6 +163,7 @@ class Agent(AgentStreamingMixin):
             on_tool_result=on_tool_result,
         )
         self._llm_node - "dispatch_tools" >> self._tool_node
+        self._llm_node - "retry" >> self._llm_node
         self._tool_node - "continue" >> self._llm_node
 
     @classmethod
@@ -347,6 +357,7 @@ class Agent(AgentStreamingMixin):
             on_tool_result=self._on_tool_result,
         )
         self._llm_node - "dispatch_tools" >> self._tool_node
+        self._llm_node - "retry" >> self._llm_node
         self._tool_node - "continue" >> self._llm_node
 
         ctx = RunContext(
@@ -359,6 +370,7 @@ class Agent(AgentStreamingMixin):
             compression_llm=self._compression_llm,
             stream_callback=stream_callback,
             on_turn=self._on_turn,
+            turn_max_retries=self._turn_max_retries,
         )
 
         if resume_checkpoint is not None:

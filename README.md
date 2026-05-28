@@ -87,6 +87,12 @@ from dataclasses import replace
 from all_in_agents import Agent, AgentTurnDecision
 
 async def gate(turn):
+    if turn.metrics["tool_calls"] == 0 and not turn.response.tool_calls:
+        return AgentTurnDecision.retry(
+            "Use tools before giving the final answer.",
+            max_retries=2,
+        )
+
     if any(tc.name == "bash" for tc in turn.response.tool_calls):
         return AgentTurnDecision.stop(
             final_answer="Waiting for approval",
@@ -103,7 +109,7 @@ agent = Agent(llm=llm, tools=tools, on_turn=gate)
 result = await agent.run("Inspect the workspace")
 ```
 
-Returning `None` continues normally. Returning `AgentTurnDecision.stop(...)` stops before tool execution. Returning `AgentTurnDecision.replace(...)` swaps the response that will be written to history and used for the next agent action.
+Returning `None` continues normally. Returning `AgentTurnDecision.stop(...)` stops before tool execution. Returning `AgentTurnDecision.replace(...)` swaps the response that will be written to history and used for the next agent action. Returning `AgentTurnDecision.retry(...)` rejects the current response, writes an `ASSISTANT_REJECTED` audit event, injects a feedback message into history, and re-calls the LLM. `AgentTurn.metrics` exposes cumulative run metrics such as `llm_calls`, `tool_calls`, and token usage. The default retry cap is `turn_max_retries=3`; each retry decision can override it with `max_retries=...`.
 
 ## CLI
 

@@ -33,6 +33,7 @@ def trace_event_to_stream_event(event: dict) -> AgentStreamEvent | None:
         "RUN_CREATED": "run_started",
         "RUN_RESUMED": "run_resumed",
         "CONTROL_DECISION": "control_decision",
+        "ASSISTANT_REJECTED": "assistant_rejected",
         "ASSISTANT_MESSAGE": "assistant_message",
         "TOOL_USE": "tool_called",
         "TOOL_RESULT": "tool_result",

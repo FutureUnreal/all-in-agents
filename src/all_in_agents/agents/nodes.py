@@ -58,15 +58,20 @@ def _tool_sig(name: str, args: dict) -> str:
     return f"{name}:{h}"
 
 
+_TURN_RETRY_COUNT_KEY = "_agent_turn_retry_count"
+_TURN_RETRY_REASON = "turn_retry_exhausted"
+
+
 async def _apply_turn_gate(
     ctx: NodeContext,
     resp: "LLMResponse",
-) -> tuple["LLMResponse", bool]:
+) -> tuple["LLMResponse", str]:
     callback = ctx.run_context.on_turn
     if callback is None:
-        return resp, False
+        return resp, "continue"
 
     from .control import AgentTurn, normalize_turn_decision
+    from ..core.run import RunStatus
 
     prep = ctx.prep_result if isinstance(ctx.prep_result, dict) else {}
     turn = AgentTurn(
@@ -78,6 +83,7 @@ async def _apply_turn_gate(
         tools=list(prep.get("tools") or []),
         system=ctx.system,
         state=ctx.state,
+        metrics=ctx.run.snapshot_metrics(),
     )
 
     raw_decision = callback(turn)
@@ -86,19 +92,61 @@ async def _apply_turn_gate(
     decision = normalize_turn_decision(raw_decision)
     effective_response = decision.response or resp
     response_replaced = effective_response is not resp
+    action = decision.action
+    retry_count = int(ctx.state.get(_TURN_RETRY_COUNT_KEY, 0) or 0)
+    max_retries = decision.max_retries
+    if max_retries is None:
+        max_retries = ctx.run_context.turn_max_retries
+    else:
+        max_retries = int(max_retries)
+
+    if action == "retry":
+        if not isinstance(decision.inject_message, str) or not decision.inject_message:
+            raise ValueError("AgentTurnDecision.retry requires a non-empty inject_message")
+        if max_retries < 0:
+            raise ValueError("Agent turn max_retries must be >= 0")
+        if retry_count >= max_retries:
+            action = "stop"
+            decision.stop_reason = _TURN_RETRY_REASON
+            decision.status = RunStatus.INCOMPLETE.value
+            decision.final_answer = (
+                decision.final_answer
+                if decision.final_answer is not None
+                else f"[stopped: turn retry limit exhausted after {retry_count} retries]"
+            )
 
     if ctx.store:
         await ctx.store.append(ctx.run.run_id, "CONTROL_DECISION", {
             "step_index": ctx.step_index,
-            "action": decision.action,
+            "action": action,
+            "requested_action": decision.action,
             "response_replaced": response_replaced,
-            "stop_reason": decision.stop_reason if decision.action == "stop" else "",
-            "status": decision.status if decision.action == "stop" else "",
+            "stop_reason": decision.stop_reason if action == "stop" else "",
+            "status": decision.status if action == "stop" else "",
+            "inject_message": decision.inject_message if decision.action == "retry" else "",
+            "retry_count": retry_count + 1 if action == "retry" else retry_count,
+            "max_retries": max_retries if decision.action == "retry" else None,
         })
 
-    if decision.action == "continue":
-        return effective_response, False
-    if decision.action == "stop":
+    if decision.action == "retry" and ctx.store:
+        await ctx.store.append(ctx.run.run_id, "ASSISTANT_REJECTED", {
+            "step_index": ctx.step_index,
+            "content": effective_response.content,
+            "tool_calls": [
+                {"id": tc.id, "name": tc.name, "args": tc.args}
+                for tc in effective_response.tool_calls
+            ],
+            "stop_reason": effective_response.stop_reason,
+        })
+
+    if action == "continue":
+        ctx.state.pop(_TURN_RETRY_COUNT_KEY, None)
+        return effective_response, "continue"
+    if action == "retry":
+        ctx.state[_TURN_RETRY_COUNT_KEY] = retry_count + 1
+        ctx.history.add("user", decision.inject_message)
+        return effective_response, "retry"
+    if action == "stop":
         ctx.final_answer = (
             decision.final_answer
             if decision.final_answer is not None
@@ -108,7 +156,7 @@ async def _apply_turn_gate(
             "stop_reason": decision.stop_reason,
             "status": decision.status,
         }
-        return effective_response, True
+        return effective_response, "stop"
 
     raise ValueError(f"Unknown agent turn decision action: {decision.action}")
 
@@ -184,7 +232,10 @@ class LLMCallNode(BaseNode):
             getattr(resp, "output_tokens", 0) or 0,
         )
 
-        resp, should_stop = await _apply_turn_gate(ctx, resp)
+        resp, control_action = await _apply_turn_gate(ctx, resp)
+
+        if control_action == "retry":
+            return "retry"
 
         if ctx.store:
             await ctx.store.append(ctx.run.run_id, "ASSISTANT_MESSAGE", {
@@ -193,7 +244,7 @@ class LLMCallNode(BaseNode):
                 "stop_reason": resp.stop_reason,
             })
 
-        if should_stop:
+        if control_action == "stop":
             return "done"
 
         if resp.stop_reason == "end_turn" or not resp.tool_calls:

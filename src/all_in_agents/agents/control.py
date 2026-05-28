@@ -19,6 +19,7 @@ class AgentTurn:
     tools: list[dict]
     system: str
     state: dict[str, Any]
+    metrics: dict[str, Any]
 
 
 @dataclass
@@ -34,6 +35,8 @@ class AgentTurnDecision:
     final_answer: str | None = None
     stop_reason: str = "user_stopped"
     status: str = RunStatus.INTERRUPTED.value
+    inject_message: str = ""
+    max_retries: int | None = None
 
     @classmethod
     def continue_(cls, response: LLMResponse | None = None) -> "AgentTurnDecision":
@@ -42,6 +45,23 @@ class AgentTurnDecision:
     @classmethod
     def replace(cls, response: LLMResponse) -> "AgentTurnDecision":
         return cls(action="continue", response=response)
+
+    @classmethod
+    def retry(
+        cls,
+        inject_message: str,
+        *,
+        max_retries: int | None = None,
+    ) -> "AgentTurnDecision":
+        if not inject_message:
+            raise ValueError("AgentTurnDecision.retry requires a non-empty inject_message")
+        if max_retries is not None and max_retries < 0:
+            raise ValueError("AgentTurnDecision.retry max_retries must be >= 0")
+        return cls(
+            action="retry",
+            inject_message=inject_message,
+            max_retries=max_retries,
+        )
 
     @classmethod
     def stop(
@@ -91,12 +111,21 @@ def normalize_turn_decision(value: Any) -> AgentTurnDecision:
         response = value.get("response")
         if response is not None and not isinstance(response, LLMResponse):
             raise TypeError("Agent turn decision 'response' must be an LLMResponse")
+        action = value.get("action", "continue")
+        inject_message = value.get("inject_message", "")
+        if action == "retry" and not isinstance(inject_message, str):
+            raise TypeError("Agent retry decision 'inject_message' must be a string")
+        max_retries = value.get("max_retries")
+        if max_retries is not None:
+            max_retries = int(max_retries)
         return AgentTurnDecision(
-            action=value.get("action", "continue"),
+            action=action,
             response=response,
             final_answer=value.get("final_answer"),
             stop_reason=value.get("stop_reason", "user_stopped"),
             status=value.get("status", RunStatus.INTERRUPTED.value),
+            inject_message=inject_message,
+            max_retries=max_retries,
         )
     raise TypeError(
         "Agent turn gate must return None, LLMResponse, AgentTurnDecision, or dict"
