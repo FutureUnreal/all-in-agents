@@ -2,7 +2,7 @@ from __future__ import annotations
 
 import inspect
 from dataclasses import dataclass, field
-from typing import TYPE_CHECKING
+from typing import TYPE_CHECKING, Any
 
 from .compactor import CompactionStrategy
 from ..utils import make_ulid as _make_ulid
@@ -85,7 +85,7 @@ class HistoryManager:
         else:
             self._compress_threshold = self.compress_threshold_tokens
 
-    def add(self, role: str, content: str, *, turn_id: str | None = None) -> str:
+    def add(self, role: str, content: Any, *, turn_id: str | None = None) -> str:
         if turn_id is None:
             turn_id = _make_ulid()
         self._messages.append({"role": role, "content": content, "_turn_id": turn_id})

@@ -3,7 +3,7 @@ from __future__ import annotations
 import asyncio
 from dataclasses import dataclass, field
 from contextlib import suppress
-from typing import Any, AsyncIterator
+from typing import Any, AsyncIterator, Iterable
 
 
 @dataclass(frozen=True)
@@ -54,6 +54,7 @@ class AgentStreamingMixin:
         self,
         goal: str,
         *,
+        initial_messages: Iterable[dict[str, Any]] | None = None,
         parent_run=None,
         checkpoint: bool = False,
         resume_from: str | None = None,
@@ -68,6 +69,7 @@ class AgentStreamingMixin:
             try:
                 await self._run(
                     goal,
+                    initial_messages=initial_messages,
                     parent_run=parent_run,
                     checkpoint=checkpoint,
                     resume_from=resume_from,
@@ -97,12 +99,14 @@ class AgentStreamingMixin:
         self,
         goal: str,
         *,
+        initial_messages: Iterable[dict[str, Any]] | None = None,
         parent_run=None,
         checkpoint: bool = False,
         resume_from: str | None = None,
     ) -> AsyncIterator[str]:
         async for event in self.stream(
             goal,
+            initial_messages=initial_messages,
             parent_run=parent_run,
             checkpoint=checkpoint,
             resume_from=resume_from,

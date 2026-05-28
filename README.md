@@ -78,6 +78,22 @@ async for text in agent.stream_text("Summarize README.md"):
 
 Stream events include `run_started`, `llm_started`, `text_delta`, `tool_call_delta`, `control_decision`, `assistant_message`, `tool_called`, `tool_result`, `run_stopped`, and `error`. `OpenAIAdapter` streams token deltas for both `chat_completions` and `responses`; adapters without native streaming fall back to one full-response chunk.
 
+### Initial Messages
+
+Use `initial_messages` to seed a single run with structured context before the current goal. This is a lightweight per-run context injection point, not a persistent session store.
+
+```python
+result = await agent.run(
+    "Continue the analysis",
+    initial_messages=[
+        {"role": "user", "content": "Earlier requirement..."},
+        {"role": "assistant", "content": "Earlier result..."},
+    ],
+)
+```
+
+`initial_messages` is also supported by `run_sync(...)`, `stream(...)`, and `stream_text(...)`. Each message must contain `role` and `content`; `content` may be a string or a provider-neutral content block list.
+
 ### Turn Gates
 
 Use `on_turn` when callers need to inspect or control a completed model turn before tools run. The callback can be sync or async, so it can pause for human approval, policy checks, or an external evaluator.

@@ -36,6 +36,26 @@ def _normalize_skill_selection(skills: Iterable[str] | str | None) -> tuple[bool
     return False, tuple(skills)
 
 
+def _normalize_initial_messages(messages: Iterable[dict[str, Any]] | None) -> list[dict[str, Any]]:
+    if messages is None:
+        return []
+
+    normalized = []
+    for index, msg in enumerate(messages):
+        if not isinstance(msg, dict):
+            raise TypeError(f"initial_messages[{index}] must be a dict")
+        role = msg.get("role")
+        if not isinstance(role, str) or not role:
+            raise ValueError(f"initial_messages[{index}].role must be a non-empty string")
+        if "content" not in msg:
+            raise ValueError(f"initial_messages[{index}].content is required")
+        content = msg["content"]
+        if not isinstance(content, (str, list)):
+            raise TypeError(f"initial_messages[{index}].content must be a string or list")
+        normalized.append({"role": role, "content": content})
+    return normalized
+
+
 @dataclass
 class AgentConfig:
     """Typed configuration for Agent. All fields have sensible defaults."""
@@ -262,12 +282,14 @@ class Agent(AgentStreamingMixin):
         self,
         goal: str,
         *,
+        initial_messages: Iterable[dict[str, Any]] | None = None,
         parent_run: Run | None = None,
         checkpoint: bool = False,
         resume_from: str | None = None,
     ) -> RunResult:
         return await self._run(
             goal,
+            initial_messages=initial_messages,
             parent_run=parent_run,
             checkpoint=checkpoint,
             resume_from=resume_from,
@@ -277,6 +299,7 @@ class Agent(AgentStreamingMixin):
         self,
         goal: str,
         *,
+        initial_messages: Iterable[dict[str, Any]] | None = None,
         parent_run: Run | None = None,
         checkpoint: bool = False,
         resume_from: str | None = None,
@@ -291,6 +314,7 @@ class Agent(AgentStreamingMixin):
         resume_checkpoint: FlowCheckpoint | None = None
         if resume_from is not None:
             resume_checkpoint = checkpoint_store.load(resume_from)
+        normalized_initial_messages = _normalize_initial_messages(initial_messages)
 
         system = self._system
         if self._inject_project_context or self._skills is not None:
@@ -379,7 +403,12 @@ class Agent(AgentStreamingMixin):
                 "step_index": resume_checkpoint.step_index,
             })
         else:
-            await store.append(run.run_id, "RUN_CREATED", {"goal": effective_goal})
+            await store.append(run.run_id, "RUN_CREATED", {
+                "goal": effective_goal,
+                "initial_message_count": len(normalized_initial_messages),
+            })
+            for msg in normalized_initial_messages:
+                history.add(msg["role"], msg["content"])
             history.add("user", effective_goal)
 
         close_reason = "goal_met"
@@ -489,6 +518,7 @@ class Agent(AgentStreamingMixin):
         self,
         goal: str,
         *,
+        initial_messages: Iterable[dict[str, Any]] | None = None,
         parent_run: Run | None = None,
         checkpoint: bool = False,
         resume_from: str | None = None,
@@ -505,6 +535,7 @@ class Agent(AgentStreamingMixin):
         return asyncio.run(
             self.run(
                 goal,
+                initial_messages=initial_messages,
                 parent_run=parent_run,
                 checkpoint=checkpoint,
                 resume_from=resume_from,

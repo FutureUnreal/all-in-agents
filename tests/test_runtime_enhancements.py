@@ -1,3 +1,4 @@
+import json
 import tempfile
 import unittest
 from dataclasses import replace
@@ -156,6 +157,26 @@ class FinishLLM(LLMAdapter):
     async def generate(self, messages, tools=None, system="", max_tokens=2048, options=None):
         return LLMResponse(
             content="resumed",
+            tool_calls=[],
+            input_tokens=1,
+            output_tokens=1,
+            stop_reason="end_turn",
+        )
+
+
+class RecordingLLM(LLMAdapter):
+    model_id = "recording"
+    max_context_tokens = 1000
+
+    def __init__(self):
+        self.calls = 0
+        self.messages = []
+
+    async def generate(self, messages, tools=None, system="", max_tokens=2048, options=None):
+        self.calls += 1
+        self.messages.append(messages)
+        return LLMResponse(
+            content="done",
             tool_calls=[],
             input_tokens=1,
             output_tokens=1,
@@ -469,6 +490,71 @@ class RuntimeEnhancementTests(unittest.IsolatedAsyncioTestCase):
 
         self.assertEqual(resumed.final_answer, "resumed")
         self.assertEqual(resumed.status, "success")
+
+    async def test_agent_run_accepts_initial_messages(self):
+        llm = RecordingLLM()
+        initial_messages = [
+            {"role": "user", "content": "previous request"},
+            {"role": "assistant", "content": "previous answer", "ignored": True},
+            {"role": "user", "content": [{"type": "text", "text": "structured note"}]},
+        ]
+
+        with tempfile.TemporaryDirectory() as tmp:
+            agent = Agent(llm, make_registry(), run_dir=tmp)
+            result = await agent.run("current task", initial_messages=initial_messages)
+            with open(result.events_path, encoding="utf-8") as f:
+                events = [json.loads(line) for line in f if line.strip()]
+
+        self.assertEqual(result.final_answer, "done")
+        self.assertEqual(llm.messages[0], [
+            {"role": "user", "content": "previous request"},
+            {"role": "assistant", "content": "previous answer"},
+            {"role": "user", "content": [{"type": "text", "text": "structured note"}]},
+            {"role": "user", "content": "current task"},
+        ])
+        self.assertEqual(events[0]["type"], "RUN_CREATED")
+        self.assertEqual(events[0]["payload"]["initial_message_count"], 3)
+
+    async def test_agent_stream_accepts_initial_messages(self):
+        llm = RecordingLLM()
+
+        with tempfile.TemporaryDirectory() as tmp:
+            agent = Agent(llm, make_registry(), run_dir=tmp)
+            events = [
+                event async for event in agent.stream(
+                    "current task",
+                    initial_messages=[{"role": "assistant", "content": "prior"}],
+                )
+            ]
+
+        self.assertEqual(llm.messages[0], [
+            {"role": "assistant", "content": "prior"},
+            {"role": "user", "content": "current task"},
+        ])
+        self.assertEqual(events[0].type, "run_started")
+        self.assertEqual(events[0].data["initial_message_count"], 1)
+
+    def test_agent_run_sync_accepts_initial_messages(self):
+        llm = RecordingLLM()
+
+        with tempfile.TemporaryDirectory() as tmp:
+            agent = Agent(llm, make_registry(), run_dir=tmp)
+            result = agent.run_sync(
+                "current task",
+                initial_messages=[{"role": "assistant", "content": "prior"}],
+            )
+
+        self.assertEqual(result.final_answer, "done")
+        self.assertEqual(llm.messages[0], [
+            {"role": "assistant", "content": "prior"},
+            {"role": "user", "content": "current task"},
+        ])
+
+    async def test_agent_rejects_invalid_initial_messages(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            agent = Agent(RecordingLLM(), make_registry(), run_dir=tmp)
+            with self.assertRaises(ValueError):
+                await agent.run("current task", initial_messages=[{"role": "user"}])
 
     async def test_agent_uses_dedicated_compression_llm(self):
         main_llm = FakeLLM()
