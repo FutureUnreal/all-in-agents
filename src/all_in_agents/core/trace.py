@@ -46,6 +46,7 @@ class RunTrace:
     def trajectory(self) -> list[dict]:
         event_types = {
             "ASSISTANT_MESSAGE",
+            "CONTROL_DECISION",
             "TOOL_USE",
             "TOOL_RESULT",
             "TOOL_ABORTED",

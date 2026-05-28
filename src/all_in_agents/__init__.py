@@ -22,7 +22,7 @@ from .history import HistoryManager, FileEventStore
 from .history.compactor import CompactionStrategy, HistoryCompactor, CompactionResult
 from .agents import (
     Agent, AgentConfig, LLMCallNode, ToolDispatchNode,
-    AgentStreamEvent,
+    AgentTurn, AgentTurnDecision, AgentStreamEvent,
     SkillContext, discover_skills, load_skills, load_project_context, build_system_prompt,
     MessageBus, TaskManager, MessageEnvelope, Task, TaskStatus,
 )
@@ -47,7 +47,8 @@ __all__ = [
     # History
     "HistoryManager", "FileEventStore", "CompactionStrategy", "HistoryCompactor", "CompactionResult",
     # Agents
-    "Agent", "AgentConfig", "AgentStreamEvent", "LLMCallNode", "ToolDispatchNode",
+    "Agent", "AgentConfig", "AgentTurn", "AgentTurnDecision",
+    "AgentStreamEvent", "LLMCallNode", "ToolDispatchNode",
     "SkillContext", "discover_skills", "load_skills", "load_project_context", "build_system_prompt",
     "MessageBus", "TaskManager", "MessageEnvelope", "Task", "TaskStatus",
 ]

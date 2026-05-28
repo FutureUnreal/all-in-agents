@@ -50,6 +50,7 @@ class AgentConfig:
     artifact_contract: ArtifactContract | None = None
     on_tool_result: Callable[[dict], Any] | None = None
     on_event: Callable[[dict], Any] | None = None
+    on_turn: Callable[[Any], Any] | None = None
     flow_hooks: FlowHooks | None = None
     flow_error_policy: ErrorPolicy | None = None
     flow_copy_nodes: bool = False
@@ -80,6 +81,7 @@ class Agent(AgentStreamingMixin):
         artifact_contract: ArtifactContract | None = None,
         on_tool_result: Callable[[dict], Any] | None = None,
         on_event: Callable[[dict], Any] | None = None,
+        on_turn: Callable[[Any], Any] | None = None,
         flow_hooks: FlowHooks | None = None,
         flow_error_policy: ErrorPolicy | None = None,
         flow_copy_nodes: bool = False,
@@ -107,6 +109,7 @@ class Agent(AgentStreamingMixin):
             artifact_contract = artifact_contract if artifact_contract is not None else config.artifact_contract
             on_tool_result = on_tool_result if on_tool_result is not None else config.on_tool_result
             on_event = on_event if on_event is not None else config.on_event
+            on_turn = on_turn if on_turn is not None else config.on_turn
             flow_hooks = flow_hooks if flow_hooks is not None else config.flow_hooks
             flow_error_policy = flow_error_policy if flow_error_policy is not None else config.flow_error_policy
             flow_copy_nodes = flow_copy_nodes if flow_copy_nodes is not False else config.flow_copy_nodes
@@ -133,6 +136,7 @@ class Agent(AgentStreamingMixin):
         self._artifact_contract = artifact_contract
         self._on_tool_result = on_tool_result
         self._on_event = on_event
+        self._on_turn = on_turn
         self._include_trajectory = include_trajectory
         self._workspace_root = workspace_root
         self._inject_project_context = inject_project_context
@@ -354,6 +358,7 @@ class Agent(AgentStreamingMixin):
             system=system,
             compression_llm=self._compression_llm,
             stream_callback=stream_callback,
+            on_turn=self._on_turn,
         )
 
         if resume_checkpoint is not None:
@@ -411,8 +416,15 @@ class Agent(AgentStreamingMixin):
                 metrics=run.snapshot_metrics(),
             )
         else:
-            run.finalize(StopReason.GOAL_MET.value, RunStatus.SUCCESS)
-            if self._artifact_contract is not None:
+            control_stop = ctx.state.pop("_agent_control_stop", None)
+            if control_stop:
+                run.finalize(
+                    control_stop.get("stop_reason") or StopReason.ABORTED.value,
+                    control_stop.get("status") or RunStatus.INTERRUPTED.value,
+                )
+            else:
+                run.finalize(StopReason.GOAL_MET.value, RunStatus.SUCCESS)
+            if self._artifact_contract is not None and run.status == RunStatus.SUCCESS.value:
                 result = self._artifact_contract.validate(self._workspace_root or ".")
                 artifact_validation = result.to_dict()
                 await store.append(run.run_id, "ARTIFACT_VALIDATION", artifact_validation)

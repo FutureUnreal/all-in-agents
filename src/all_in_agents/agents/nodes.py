@@ -58,6 +58,61 @@ def _tool_sig(name: str, args: dict) -> str:
     return f"{name}:{h}"
 
 
+async def _apply_turn_gate(
+    ctx: NodeContext,
+    resp: "LLMResponse",
+) -> tuple["LLMResponse", bool]:
+    callback = ctx.run_context.on_turn
+    if callback is None:
+        return resp, False
+
+    from .control import AgentTurn, normalize_turn_decision
+
+    prep = ctx.prep_result if isinstance(ctx.prep_result, dict) else {}
+    turn = AgentTurn(
+        run_id=ctx.run.run_id,
+        goal=ctx.run.goal,
+        step_index=ctx.step_index,
+        response=resp,
+        messages=list(prep.get("messages") or []),
+        tools=list(prep.get("tools") or []),
+        system=ctx.system,
+        state=ctx.state,
+    )
+
+    raw_decision = callback(turn)
+    if asyncio.iscoroutine(raw_decision):
+        raw_decision = await raw_decision
+    decision = normalize_turn_decision(raw_decision)
+    effective_response = decision.response or resp
+    response_replaced = effective_response is not resp
+
+    if ctx.store:
+        await ctx.store.append(ctx.run.run_id, "CONTROL_DECISION", {
+            "step_index": ctx.step_index,
+            "action": decision.action,
+            "response_replaced": response_replaced,
+            "stop_reason": decision.stop_reason if decision.action == "stop" else "",
+            "status": decision.status if decision.action == "stop" else "",
+        })
+
+    if decision.action == "continue":
+        return effective_response, False
+    if decision.action == "stop":
+        ctx.final_answer = (
+            decision.final_answer
+            if decision.final_answer is not None
+            else effective_response.content or ""
+        )
+        ctx.state["_agent_control_stop"] = {
+            "stop_reason": decision.stop_reason,
+            "status": decision.status,
+        }
+        return effective_response, True
+
+    raise ValueError(f"Unknown agent turn decision action: {decision.action}")
+
+
 class LLMCallNode(BaseNode):
     async def prep(self, ctx: NodeContext) -> dict:
         max_tokens = None
@@ -129,12 +184,17 @@ class LLMCallNode(BaseNode):
             getattr(resp, "output_tokens", 0) or 0,
         )
 
+        resp, should_stop = await _apply_turn_gate(ctx, resp)
+
         if ctx.store:
             await ctx.store.append(ctx.run.run_id, "ASSISTANT_MESSAGE", {
                 "content": resp.content,
                 "tool_calls": [{"id": tc.id, "name": tc.name, "args": tc.args} for tc in resp.tool_calls],
                 "stop_reason": resp.stop_reason,
             })
+
+        if should_stop:
+            return "done"
 
         if resp.stop_reason == "end_turn" or not resp.tool_calls:
             ctx.final_answer = resp.content or ""

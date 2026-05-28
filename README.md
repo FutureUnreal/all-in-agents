@@ -76,7 +76,34 @@ async for text in agent.stream_text("Summarize README.md"):
     print(text, end="")
 ```
 
-Stream events include `run_started`, `llm_started`, `text_delta`, `tool_call_delta`, `assistant_message`, `tool_called`, `tool_result`, `run_stopped`, and `error`. `OpenAIAdapter` streams token deltas for both `chat_completions` and `responses`; adapters without native streaming fall back to one full-response chunk.
+Stream events include `run_started`, `llm_started`, `text_delta`, `tool_call_delta`, `control_decision`, `assistant_message`, `tool_called`, `tool_result`, `run_stopped`, and `error`. `OpenAIAdapter` streams token deltas for both `chat_completions` and `responses`; adapters without native streaming fall back to one full-response chunk.
+
+### Turn Gates
+
+Use `on_turn` when callers need to inspect or control a completed model turn before tools run. The callback can be sync or async, so it can pause for human approval, policy checks, or an external evaluator.
+
+```python
+from dataclasses import replace
+from all_in_agents import Agent, AgentTurnDecision
+
+async def gate(turn):
+    if any(tc.name == "bash" for tc in turn.response.tool_calls):
+        return AgentTurnDecision.stop(
+            final_answer="Waiting for approval",
+            stop_reason="human_gate",
+        )
+
+    # Replace the effective assistant response before tool dispatch.
+    if len(turn.response.tool_calls) > 3:
+        return AgentTurnDecision.replace(
+            replace(turn.response, tool_calls=[], stop_reason="end_turn")
+        )
+
+agent = Agent(llm=llm, tools=tools, on_turn=gate)
+result = await agent.run("Inspect the workspace")
+```
+
+Returning `None` continues normally. Returning `AgentTurnDecision.stop(...)` stops before tool execution. Returning `AgentTurnDecision.replace(...)` swaps the response that will be written to history and used for the next agent action.
 
 ## CLI
 

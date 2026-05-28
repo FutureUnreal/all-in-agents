@@ -1,9 +1,11 @@
 import tempfile
 import unittest
+from dataclasses import replace
 from pathlib import Path
 
 from all_in_agents import (
     Agent,
+    AgentTurnDecision,
     BatchNode,
     BaseNode,
     ConditionalNode,
@@ -458,6 +460,61 @@ class RuntimeEnhancementTests(unittest.IsolatedAsyncioTestCase):
             text = [chunk async for chunk in agent.stream_text("use the tool")]
 
         self.assertEqual("".join(text), "callingdone")
+
+    async def test_agent_turn_gate_can_stop_before_tool_dispatch(self):
+        seen = []
+
+        async def gate(turn):
+            seen.append([tc.name for tc in turn.response.tool_calls])
+            return AgentTurnDecision.stop(
+                final_answer="waiting for approval",
+                stop_reason="human_gate",
+            )
+
+        with tempfile.TemporaryDirectory() as tmp:
+            agent = Agent(
+                FakeLLM(),
+                make_registry(),
+                run_dir=tmp,
+                on_turn=gate,
+                include_trajectory=True,
+            )
+            result = await agent.run("use the tool")
+
+        self.assertEqual(seen, [["echo"]])
+        self.assertEqual(result.final_answer, "waiting for approval")
+        self.assertEqual(result.status, "interrupted")
+        self.assertEqual(result.stop_reason, "human_gate")
+        event_types = [event["type"] for event in result.trajectory]
+        self.assertIn("CONTROL_DECISION", event_types)
+        self.assertNotIn("TOOL_USE", event_types)
+
+    async def test_agent_turn_gate_can_replace_response(self):
+        def gate(turn):
+            return AgentTurnDecision.replace(
+                replace(
+                    turn.response,
+                    content="blocked tool call",
+                    tool_calls=[],
+                    stop_reason="end_turn",
+                )
+            )
+
+        with tempfile.TemporaryDirectory() as tmp:
+            agent = Agent(
+                FakeLLM(),
+                make_registry(),
+                run_dir=tmp,
+                on_turn=gate,
+                include_trajectory=True,
+            )
+            result = await agent.run("use the tool")
+
+        self.assertEqual(result.final_answer, "blocked tool call")
+        self.assertEqual(result.status, "success")
+        event_types = [event["type"] for event in result.trajectory]
+        self.assertIn("CONTROL_DECISION", event_types)
+        self.assertNotIn("TOOL_USE", event_types)
 
 
 if __name__ == "__main__":
