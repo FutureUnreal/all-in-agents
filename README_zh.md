@@ -51,6 +51,23 @@ print(result["final_answer"])
 
 > **在 Jupyter Notebook 或异步框架中？** 直接使用 `await agent.run(goal)` 即可。
 
+### 流式输出
+
+使用 `agent.stream(...)` 获取类型化 agent 事件；如果只需要文本增量，可以用 `agent.stream_text(...)`。
+
+```python
+async for event in agent.stream("总结 README.md"):
+    if event.type == "text_delta":
+        print(event.data["delta"], end="")
+    elif event.type == "tool_called":
+        print("\ncalling", event.data["name"])
+
+async for text in agent.stream_text("总结 README.md"):
+    print(text, end="")
+```
+
+事件包括 `run_started`、`llm_started`、`text_delta`、`tool_call_delta`、`assistant_message`、`tool_called`、`tool_result`、`run_stopped` 和 `error`。`OpenAIAdapter` 对 `chat_completions` 和 `responses` 都支持 token delta；没有原生 streaming 的 adapter 会退化为一次性完整响应 chunk。
+
 ## 核心概念
 
 ### 节点 / 流
@@ -406,6 +423,7 @@ all_in_agents/
 └── agents/
     ├── base.py      Agent · AgentConfig · Agent.quick()
     ├── nodes.py     LLMCallNode · ToolDispatchNode
+    ├── streaming.py AgentStreamEvent
     └── multi.py     MessageBus · TaskManager · MessageEnvelope · Task · TaskStatus
 ```
 

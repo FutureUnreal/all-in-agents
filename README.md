@@ -61,6 +61,23 @@ print(result.final_answer)
 
 > **Jupyter Notebook or async framework?** Use `await agent.run(goal)` directly.
 
+### Streaming
+
+Use `agent.stream(...)` for typed agent events, or `agent.stream_text(...)` when you only need text deltas.
+
+```python
+async for event in agent.stream("Summarize README.md"):
+    if event.type == "text_delta":
+        print(event.data["delta"], end="")
+    elif event.type == "tool_called":
+        print("\ncalling", event.data["name"])
+
+async for text in agent.stream_text("Summarize README.md"):
+    print(text, end="")
+```
+
+Stream events include `run_started`, `llm_started`, `text_delta`, `tool_call_delta`, `assistant_message`, `tool_called`, `tool_result`, `run_stopped`, and `error`. `OpenAIAdapter` streams token deltas for both `chat_completions` and `responses`; adapters without native streaming fall back to one full-response chunk.
+
 ## CLI
 
 ```bash
@@ -431,6 +448,7 @@ all_in_agents/
 └── agents/
     ├── base.py      Agent · AgentConfig · Agent.quick()
     ├── nodes.py     LLMCallNode · ToolDispatchNode
+    ├── streaming.py AgentStreamEvent
     ├── harness.py   AGENTS.md / .context/ project context loader
     └── multi.py     MessageBus · TaskManager · MessageEnvelope · Task · TaskStatus
 ```

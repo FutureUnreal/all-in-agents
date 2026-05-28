@@ -1,7 +1,7 @@
 import asyncio
 import os
 import random
-from typing import Any
+from typing import Any, AsyncIterator
 
 from .base import (
     ConfigError,
@@ -10,10 +10,11 @@ from .base import (
     LLMAdapter,
     LLMError,
     LLMResponse,
+    LLMStreamEvent,
     close_async_client,
 )
-from .openai_chat import build_chat_kwargs, parse_chat_response
-from .openai_responses import build_responses_kwargs, parse_responses_response
+from .openai_chat import build_chat_kwargs, parse_chat_response, stream_chat_response
+from .openai_responses import build_responses_kwargs, parse_responses_response, stream_responses_response
 from .openai_utils import normalize_api
 
 _RETRYABLE_STATUS = {429, 500, 502, 503, 504}
@@ -89,6 +90,40 @@ class OpenAIAdapter(LLMAdapter):
         finally:
             await close_async_client(client)
 
+    async def stream(
+        self,
+        messages: list[dict],
+        tools: list[dict] | None = None,
+        system: str = "",
+        max_tokens: int = 2048,
+        options: GenerationOptions | None = None,
+    ) -> AsyncIterator[LLMStreamEvent]:
+        try:
+            import openai as _openai
+        except ImportError:
+            raise ImportError("Install openai: pip install 'all-in-agents[openai]'")
+
+        if not self.model_id:
+            raise ConfigError("OpenAIAdapter requires an explicit model; e.g. OpenAIAdapter(model='gpt-4o')")
+
+        api_key = self._api_key or os.environ.get("OPENAI_API_KEY")
+        if not api_key:
+            raise ConfigError("OPENAI_API_KEY not set")
+
+        client = _openai.AsyncOpenAI(api_key=api_key, base_url=self._base_url)
+        try:
+            async for event in self._stream_with_client(
+                client,
+                messages=messages,
+                tools=tools or [],
+                system=system,
+                max_tokens=max_tokens,
+                options=self._options.merge(options),
+            ):
+                yield event
+        finally:
+            await close_async_client(client)
+
     async def _generate_with_client(
         self,
         client,
@@ -116,6 +151,53 @@ class OpenAIAdapter(LLMAdapter):
                 error_class, retry_after_ms = self._classify_error(e, status)
 
                 if status not in _RETRYABLE_STATUS and not self._is_transient(e):
+                    raise LLMError(str(e), error_class, attempt + 1, retry_after_ms=retry_after_ms)
+
+                last_err = e
+                if attempt < self._max_retries - 1:
+                    wait_ms = retry_after_ms if retry_after_ms is not None else random.random() * delay_ms
+                    await asyncio.sleep(wait_ms / 1000)
+                    delay_ms = min(int(delay_ms * self._backoff_multiplier), self._max_delay_ms)
+
+        raise LLMError(str(last_err), ErrorClass.TRANSIENT, self._max_retries)
+
+    async def _stream_with_client(
+        self,
+        client,
+        *,
+        messages: list[dict],
+        tools: list[dict],
+        system: str,
+        max_tokens: int,
+        options: GenerationOptions,
+    ) -> AsyncIterator[LLMStreamEvent]:
+        last_err: Exception | None = None
+        delay_ms = self._base_delay_ms
+        yielded = False
+
+        for attempt in range(self._max_retries):
+            try:
+                if self._api == "responses":
+                    kwargs = build_responses_kwargs(self.model_id, messages, tools, system, max_tokens, options)
+                    kwargs["stream"] = True
+                    async for event in stream_responses_response(await client.responses.create(**kwargs)):
+                        yielded = True
+                        yield event
+                    return
+
+                kwargs = build_chat_kwargs(self.model_id, messages, tools, system, max_tokens, options)
+                kwargs["stream"] = True
+                kwargs.setdefault("stream_options", {"include_usage": True})
+                async for event in stream_chat_response(await client.chat.completions.create(**kwargs)):
+                    yielded = True
+                    yield event
+                return
+
+            except Exception as e:
+                status = getattr(getattr(e, "response", None), "status_code", None)
+                error_class, retry_after_ms = self._classify_error(e, status)
+
+                if yielded or (status not in _RETRYABLE_STATUS and not self._is_transient(e)):
                     raise LLMError(str(e), error_class, attempt + 1, retry_after_ms=retry_after_ms)
 
                 last_err = e

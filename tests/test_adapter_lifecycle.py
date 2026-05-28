@@ -12,6 +12,8 @@ class FakeOpenAIClient:
     last = None
     response = None
     responses_response = None
+    chat_stream = None
+    responses_stream = None
     error = None
 
     def __init__(self, **kwargs):
@@ -27,12 +29,16 @@ class FakeOpenAIClient:
         self.last_chat_kwargs = kwargs
         if FakeOpenAIClient.error:
             raise FakeOpenAIClient.error
+        if kwargs.get("stream"):
+            return FakeOpenAIClient.chat_stream
         return FakeOpenAIClient.response
 
     async def create_response(self, **kwargs):
         self.last_responses_kwargs = kwargs
         if FakeOpenAIClient.error:
             raise FakeOpenAIClient.error
+        if kwargs.get("stream"):
+            return FakeOpenAIClient.responses_stream
         return FakeOpenAIClient.responses_response
 
     async def close(self):
@@ -92,6 +98,11 @@ def bad_request_error():
     error = Exception("bad request")
     error.response = SimpleNamespace(status_code=400)
     return error
+
+
+async def async_iter(items):
+    for item in items:
+        yield item
 
 
 class AdapterLifecycleTests(unittest.IsolatedAsyncioTestCase):
@@ -217,6 +228,63 @@ class AdapterLifecycleTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(response.tool_calls[0].id, "call_1")
         self.assertEqual(response.tool_calls[0].name, "lookup")
         self.assertEqual(response.tool_calls[0].args, {"query": "agent"})
+
+    async def test_openai_chat_stream_yields_text_and_final_response(self):
+        FakeOpenAIClient.chat_stream = async_iter([
+            SimpleNamespace(
+                choices=[
+                    SimpleNamespace(
+                        delta=SimpleNamespace(content="he", tool_calls=None),
+                        finish_reason=None,
+                    )
+                ],
+                usage=None,
+            ),
+            SimpleNamespace(
+                choices=[
+                    SimpleNamespace(
+                        delta=SimpleNamespace(content="llo", tool_calls=None),
+                        finish_reason="stop",
+                    )
+                ],
+                usage=None,
+            ),
+            SimpleNamespace(
+                choices=[],
+                usage=SimpleNamespace(prompt_tokens=2, completion_tokens=3),
+            ),
+        ])
+        FakeOpenAIClient.error = None
+
+        with patch.dict(sys.modules, {"openai": SimpleNamespace(AsyncOpenAI=FakeOpenAIClient)}):
+            adapter = OpenAIAdapter(model="test-model", api_key="test-key")
+            events = [event async for event in adapter.stream([{"role": "user", "content": "hi"}])]
+
+        self.assertTrue(FakeOpenAIClient.last.closed)
+        self.assertTrue(FakeOpenAIClient.last.last_chat_kwargs["stream"])
+        self.assertEqual([event.delta for event in events if event.type == "text_delta"], ["he", "llo"])
+        final = events[-1].response
+        self.assertEqual(final.content, "hello")
+        self.assertEqual(final.input_tokens, 2)
+        self.assertEqual(final.output_tokens, 3)
+
+    async def test_openai_responses_stream_yields_text_and_final_response(self):
+        completed = SimpleNamespace(type="response.completed", response=responses_response())
+        FakeOpenAIClient.responses_stream = async_iter([
+            SimpleNamespace(type="response.output_text.delta", delta="do"),
+            SimpleNamespace(type="response.output_text.delta", delta="ne"),
+            completed,
+        ])
+        FakeOpenAIClient.error = None
+
+        with patch.dict(sys.modules, {"openai": SimpleNamespace(AsyncOpenAI=FakeOpenAIClient)}):
+            adapter = OpenAIAdapter(model="test-model", api_key="test-key", api="responses")
+            events = [event async for event in adapter.stream([{"role": "user", "content": "hi"}])]
+
+        self.assertTrue(FakeOpenAIClient.last.closed)
+        self.assertTrue(FakeOpenAIClient.last.last_responses_kwargs["stream"])
+        self.assertEqual([event.delta for event in events if event.type == "text_delta"], ["do", "ne"])
+        self.assertEqual(events[-1].response.content, "done")
 
     def test_agent_quick_forwards_generation_options_to_openai_adapter(self):
         schema = {"type": "json_object"}

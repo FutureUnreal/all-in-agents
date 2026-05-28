@@ -2,8 +2,8 @@ from __future__ import annotations
 
 import json
 
-from .base import GenerationOptions, LLMResponse, ToolCall
-from .openai_utils import response_format_for_chat
+from .base import GenerationOptions, LLMResponse, LLMStreamEvent, ToolCall
+from .openai_utils import get_attr, response_format_for_chat
 
 _STOP_REASON_MAP = {
     "stop": "end_turn",
@@ -133,3 +133,83 @@ def parse_chat_response(resp) -> LLMResponse:
         output_tokens=resp.usage.completion_tokens if resp.usage else 0,
         stop_reason=map_finish_reason(choice.finish_reason),
     )
+
+
+def _chunk_choices(chunk) -> list:
+    choices = getattr(chunk, "choices", None)
+    if choices is None and isinstance(chunk, dict):
+        choices = chunk.get("choices")
+    return list(choices or [])
+
+
+async def stream_chat_response(stream):
+    content_parts: list[str] = []
+    tool_buffers: dict[int, dict] = {}
+    finish_reason: str | None = None
+    input_tokens = 0
+    output_tokens = 0
+
+    async for chunk in stream:
+        usage = get_attr(chunk, "usage")
+        if usage:
+            input_tokens = get_attr(usage, "prompt_tokens") or input_tokens
+            output_tokens = get_attr(usage, "completion_tokens") or output_tokens
+
+        for choice in _chunk_choices(chunk):
+            finish_reason = get_attr(choice, "finish_reason") or finish_reason
+            delta = get_attr(choice, "delta")
+            if delta is None:
+                continue
+
+            text_delta = get_attr(delta, "content")
+            if text_delta:
+                content_parts.append(text_delta)
+                yield LLMStreamEvent(type="text_delta", delta=text_delta, raw=chunk)
+
+            for tc in get_attr(delta, "tool_calls") or []:
+                index = get_attr(tc, "index")
+                if index is None:
+                    index = len(tool_buffers)
+                buf = tool_buffers.setdefault(index, {"id": "", "name": "", "arguments": ""})
+
+                tc_id = get_attr(tc, "id")
+                if tc_id:
+                    buf["id"] = tc_id
+
+                fn = get_attr(tc, "function")
+                name_delta = get_attr(fn, "name") if fn is not None else None
+                args_delta = get_attr(fn, "arguments") if fn is not None else None
+                if name_delta:
+                    buf["name"] += name_delta
+                if args_delta:
+                    buf["arguments"] += args_delta
+
+                yield LLMStreamEvent(
+                    type="tool_call_delta",
+                    delta=args_delta or name_delta or "",
+                    tool_call_delta={
+                        "index": index,
+                        "id": buf["id"],
+                        "name": buf["name"],
+                        "arguments_delta": args_delta or "",
+                    },
+                    raw=chunk,
+                )
+
+    tool_calls: list[ToolCall] = []
+    for index in sorted(tool_buffers):
+        buf = tool_buffers[index]
+        try:
+            args = json.loads(buf["arguments"] or "{}")
+        except (json.JSONDecodeError, TypeError):
+            args = {}
+        tool_calls.append(ToolCall(id=buf["id"], name=buf["name"], args=args))
+
+    response = LLMResponse(
+        content="".join(content_parts) or None,
+        tool_calls=tool_calls,
+        input_tokens=input_tokens,
+        output_tokens=output_tokens,
+        stop_reason="tool_use" if tool_calls else map_finish_reason(finish_reason),
+    )
+    yield LLMStreamEvent(type="message", response=response)

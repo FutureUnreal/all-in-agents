@@ -2,7 +2,7 @@ from __future__ import annotations
 
 import json
 
-from .base import GenerationOptions, LLMResponse, ToolCall
+from .base import GenerationOptions, LLMResponse, LLMStreamEvent, ToolCall
 from .openai_utils import get_attr, parse_json_object, response_format_for_responses
 
 
@@ -123,3 +123,93 @@ def parse_responses_response(resp) -> LLMResponse:
         output_tokens=getattr(usage, "output_tokens", 0) if usage else 0,
         stop_reason="tool_use" if tool_calls else "end_turn",
     )
+
+
+def _event_type(event) -> str:
+    return get_attr(event, "type") or ""
+
+
+def _event_key(event) -> str:
+    return (
+        get_attr(event, "item_id")
+        or get_attr(event, "call_id")
+        or str(get_attr(event, "output_index") or get_attr(event, "item_index") or len(str(event)))
+    )
+
+
+async def stream_responses_response(stream):
+    content_parts: list[str] = []
+    tool_buffers: dict[str, dict] = {}
+    final_response = None
+
+    async for event in stream:
+        event_type = _event_type(event)
+
+        if event_type in ("response.output_text.delta", "response.refusal.delta"):
+            delta = get_attr(event, "delta") or ""
+            if delta:
+                content_parts.append(delta)
+                yield LLMStreamEvent(type="text_delta", delta=delta, raw=event)
+            continue
+
+        if event_type == "response.function_call_arguments.delta":
+            key = _event_key(event)
+            buf = tool_buffers.setdefault(key, {"id": get_attr(event, "call_id") or "", "name": "", "arguments": ""})
+            delta = get_attr(event, "delta") or ""
+            buf["arguments"] += delta
+            yield LLMStreamEvent(
+                type="tool_call_delta",
+                delta=delta,
+                tool_call_delta={
+                    "id": buf["id"],
+                    "name": buf["name"],
+                    "arguments_delta": delta,
+                },
+                raw=event,
+            )
+            continue
+
+        if event_type in ("response.output_item.added", "response.output_item.done"):
+            item = get_attr(event, "item")
+            if get_attr(item, "type") == "function_call":
+                key = get_attr(item, "id") or get_attr(item, "call_id") or _event_key(event)
+                buf = tool_buffers.setdefault(key, {"id": "", "name": "", "arguments": ""})
+                buf["id"] = get_attr(item, "call_id") or get_attr(item, "id") or buf["id"]
+                buf["name"] = get_attr(item, "name") or buf["name"]
+                arguments = get_attr(item, "arguments")
+                if arguments:
+                    buf["arguments"] = arguments
+                yield LLMStreamEvent(
+                    type="tool_call_delta",
+                    tool_call_delta={
+                        "id": buf["id"],
+                        "name": buf["name"],
+                        "arguments": buf["arguments"],
+                    },
+                    raw=event,
+                )
+            continue
+
+        if event_type == "response.completed":
+            response = get_attr(event, "response")
+            if response is not None:
+                final_response = parse_responses_response(response)
+
+    if final_response is None:
+        tool_calls = []
+        for key in sorted(tool_buffers):
+            buf = tool_buffers[key]
+            tool_calls.append(ToolCall(
+                id=buf["id"],
+                name=buf["name"],
+                args=parse_json_object(buf["arguments"] or "{}"),
+            ))
+        final_response = LLMResponse(
+            content="".join(content_parts) or None,
+            tool_calls=tool_calls,
+            input_tokens=0,
+            output_tokens=0,
+            stop_reason="tool_use" if tool_calls else "end_turn",
+        )
+
+    yield LLMStreamEvent(type="message", response=final_response)

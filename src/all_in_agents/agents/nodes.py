@@ -10,7 +10,18 @@ from ..core.node import BaseNode
 from ..utils import make_ulid as _make_ulid
 
 if TYPE_CHECKING:
-    from ..adapters.base import LLMResponse
+    from ..adapters.base import LLMResponse, ToolCall
+
+
+async def _emit_stream_event(ctx: NodeContext, event_type: str, data: dict) -> None:
+    callback = ctx.run_context.stream_callback
+    if callback is None:
+        return
+    from .streaming import AgentStreamEvent
+
+    result = callback(AgentStreamEvent(type=event_type, run_id=ctx.run.run_id, data=data))
+    if asyncio.iscoroutine(result):
+        await result
 
 
 def _coerce_llm_response(value: Any) -> "LLMResponse | None":
@@ -63,11 +74,53 @@ class LLMCallNode(BaseNode):
 
     async def exec(self, prep: dict, ctx: NodeContext) -> "LLMResponse":
         ctx.run.check_budget("llm_call")
-        return await ctx.llm.generate(
+        if ctx.run_context.stream_callback is None:
+            return await ctx.llm.generate(
+                messages=prep["messages"],
+                tools=prep["tools"],
+                system=ctx.system,
+                max_tokens=prep["max_output_tokens"],
+            )
+
+        await _emit_stream_event(ctx, "llm_started", {
+            "max_tokens": prep["max_output_tokens"],
+            "tool_names": [tool.get("name", "") for tool in prep["tools"]],
+        })
+
+        final_response = None
+        text_parts: list[str] = []
+        tool_calls: list["ToolCall"] = []
+        async for event in ctx.llm.stream(
             messages=prep["messages"],
             tools=prep["tools"],
             system=ctx.system,
             max_tokens=prep["max_output_tokens"],
+        ):
+            if event.type == "text_delta" and event.delta:
+                text_parts.append(event.delta)
+                await _emit_stream_event(ctx, "text_delta", {"delta": event.delta})
+            elif event.type == "tool_call_delta":
+                if event.tool_call is not None:
+                    tool_calls.append(event.tool_call)
+                await _emit_stream_event(ctx, "tool_call_delta", {
+                    "delta": event.delta,
+                    "tool_call": _tool_call_to_dict(event.tool_call) if event.tool_call else None,
+                    "tool_call_delta": event.tool_call_delta,
+                })
+            elif event.type == "message" and event.response is not None:
+                final_response = event.response
+
+        if final_response is not None:
+            return final_response
+
+        from ..adapters.base import LLMResponse
+
+        return LLMResponse(
+            content="".join(text_parts) or None,
+            tool_calls=tool_calls,
+            input_tokens=0,
+            output_tokens=0,
+            stop_reason="tool_use" if tool_calls else "end_turn",
         )
 
     async def post(self, ctx: NodeContext, resp: "LLMResponse") -> str:
@@ -92,6 +145,12 @@ class LLMCallNode(BaseNode):
         ctx.state["llm_response"] = resp
         ctx.history.add_assistant_tool_calls(resp.content or "" if resp.content else None, resp.tool_calls, turn_id=turn_id)
         return "dispatch_tools"
+
+
+def _tool_call_to_dict(tool_call: "ToolCall | None") -> dict | None:
+    if tool_call is None:
+        return None
+    return {"id": tool_call.id, "name": tool_call.name, "args": tool_call.args}
 
 
 class ToolDispatchNode(BaseNode):

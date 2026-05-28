@@ -14,6 +14,7 @@ from all_in_agents import (
     JsonCheckpointStore,
     LLMAdapter,
     LLMResponse,
+    LLMStreamEvent,
     Node,
     RetryPolicy,
     Run,
@@ -157,6 +158,48 @@ class FinishLLM(LLMAdapter):
             input_tokens=1,
             output_tokens=1,
             stop_reason="end_turn",
+        )
+
+
+class StreamingLLM(LLMAdapter):
+    model_id = "streaming"
+    max_context_tokens = 1000
+
+    def __init__(self):
+        self.calls = 0
+
+    async def generate(self, messages, tools=None, system="", max_tokens=2048, options=None):
+        raise AssertionError("streaming agent should call stream")
+
+    async def stream(self, messages, tools=None, system="", max_tokens=2048, options=None):
+        self.calls += 1
+        if self.calls == 1:
+            tool_call = ToolCall(id="tool_1", name="echo", args={"text": "hi"})
+            yield LLMStreamEvent(type="text_delta", delta="calling")
+            yield LLMStreamEvent(type="tool_call_delta", tool_call=tool_call)
+            yield LLMStreamEvent(
+                type="message",
+                response=LLMResponse(
+                    content="calling",
+                    tool_calls=[tool_call],
+                    input_tokens=2,
+                    output_tokens=3,
+                    stop_reason="tool_use",
+                ),
+            )
+            return
+
+        yield LLMStreamEvent(type="text_delta", delta="do")
+        yield LLMStreamEvent(type="text_delta", delta="ne")
+        yield LLMStreamEvent(
+            type="message",
+            response=LLMResponse(
+                content="done",
+                tool_calls=[],
+                input_tokens=4,
+                output_tokens=5,
+                stop_reason="end_turn",
+            ),
         )
 
 
@@ -388,6 +431,33 @@ class RuntimeEnhancementTests(unittest.IsolatedAsyncioTestCase):
             await agent.run("use the tool")
 
         self.assertIs(compactor.llm, compression_llm)
+
+    async def test_agent_stream_yields_model_and_tool_events(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            agent = Agent(StreamingLLM(), make_registry(), run_dir=tmp)
+            events = [event async for event in agent.stream("use the tool")]
+
+        event_types = [event.type for event in events]
+        self.assertIn("run_started", event_types)
+        self.assertIn("llm_started", event_types)
+        self.assertIn("text_delta", event_types)
+        self.assertIn("tool_call_delta", event_types)
+        self.assertIn("tool_called", event_types)
+        self.assertIn("tool_result", event_types)
+        self.assertIn("run_stopped", event_types)
+        self.assertEqual(
+            "".join(event.data["delta"] for event in events if event.type == "text_delta"),
+            "callingdone",
+        )
+        self.assertEqual(events[-1].type, "run_stopped")
+        self.assertEqual(events[-1].data["final_answer"], "done")
+
+    async def test_agent_stream_text_filters_text_deltas(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            agent = Agent(StreamingLLM(), make_registry(), run_dir=tmp)
+            text = [chunk async for chunk in agent.stream_text("use the tool")]
+
+        self.assertEqual("".join(text), "callingdone")
 
 
 if __name__ == "__main__":

@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import asyncio
 from dataclasses import dataclass
 from typing import TYPE_CHECKING, Callable, Any, Iterable
 
@@ -17,6 +18,7 @@ from ..tools.policy import ToolPolicy
 from ..history.compactor import CompactionStrategy
 from ..agents.harness import build_system_prompt
 from ..agents.nodes import LLMCallNode, ToolDispatchNode
+from ..agents.streaming import AgentStreamEvent, AgentStreamingMixin, trace_event_to_stream_event
 from ..utils import make_ulid as _make_ulid, iso_now as _iso_now
 
 if TYPE_CHECKING:
@@ -61,7 +63,7 @@ class AgentConfig:
     checkpoint_dir: str | None = None
 
 
-class Agent:
+class Agent(AgentStreamingMixin):
     def __init__(
         self,
         llm: "LLMAdapter",
@@ -250,6 +252,22 @@ class Agent:
         checkpoint: bool = False,
         resume_from: str | None = None,
     ) -> RunResult:
+        return await self._run(
+            goal,
+            parent_run=parent_run,
+            checkpoint=checkpoint,
+            resume_from=resume_from,
+        )
+
+    async def _run(
+        self,
+        goal: str,
+        *,
+        parent_run: Run | None = None,
+        checkpoint: bool = False,
+        resume_from: str | None = None,
+        stream_callback: Callable[[AgentStreamEvent], Any] | None = None,
+    ) -> RunResult:
         checkpoint_enabled = checkpoint or resume_from is not None
         checkpoint_store = (
             JsonCheckpointStore(self._checkpoint_dir or self._run_dir)
@@ -299,8 +317,20 @@ class Agent:
                 tool_policy=self._tool_policy,
             )
         store = FileEventStore(self._run_dir, redact_tool_result=self._redact_tool_result)
-        if self._on_event is not None:
-            store._on_event = self._on_event
+        if self._on_event is not None or stream_callback is not None:
+            async def _dispatch_store_event(event: dict) -> None:
+                if self._on_event is not None:
+                    result = self._on_event(event)
+                    if hasattr(result, "__await__"):
+                        await result
+                if stream_callback is not None:
+                    stream_event = trace_event_to_stream_event(event)
+                    if stream_event is not None:
+                        result = stream_callback(stream_event)
+                        if hasattr(result, "__await__"):
+                            await result
+
+            store._on_event = _dispatch_store_event
         history = HistoryManager(
             max_context_tokens=self._llm.max_context_tokens,
             compactor=self._history_compactor,
@@ -323,6 +353,7 @@ class Agent:
             store=store,
             system=system,
             compression_llm=self._compression_llm,
+            stream_callback=stream_callback,
         )
 
         if resume_checkpoint is not None:
@@ -357,7 +388,12 @@ class Agent:
                 run.finalize(StopReason.BUDGET_EXHAUSTED.value, RunStatus.BUDGET_EXHAUSTED)
             else:
                 run.finalize(StopReason.LOOP_DETECTED.value, RunStatus.INCOMPLETE)
-            await store.append(run.run_id, "RUN_STOPPED", {"reason": str(e), "metrics": run.snapshot_metrics()})
+            await store.append(run.run_id, "RUN_STOPPED", {
+                "reason": str(e),
+                "status": run.status,
+                "final_answer": ctx.final_answer,
+                "metrics": run.snapshot_metrics(),
+            })
         except Exception as e:
             ctx.final_answer = ctx.final_answer or f"[aborted: {e}]"
             close_reason = str(e)
@@ -385,7 +421,12 @@ class Agent:
                     if any("schema" in err.lower() or "json" in err.lower() for err in result.errors):
                         reason = StopReason.VALIDATION_FAILED.value
                     run.finalize(reason, RunStatus.INCOMPLETE)
-            await store.append(run.run_id, "RUN_STOPPED", {"reason": run.stop_reason, "metrics": run.snapshot_metrics()})
+            await store.append(run.run_id, "RUN_STOPPED", {
+                "reason": run.stop_reason,
+                "status": run.status,
+                "final_answer": ctx.final_answer,
+                "metrics": run.snapshot_metrics(),
+            })
             flow_completed = True
         finally:
             try:
@@ -428,7 +469,6 @@ class Agent:
         checkpoint: bool = False,
         resume_from: str | None = None,
     ) -> RunResult:
-        import asyncio
         try:
             loop = asyncio.get_running_loop()
         except RuntimeError:

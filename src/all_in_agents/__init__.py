@@ -7,7 +7,7 @@ from .core import (
     Workflow, Step, StepResult, WorkflowResult,
 )
 from .adapters import (
-    LLMAdapter, LLMResponse, ToolCall, GenerationOptions, ConfigError, LLMError,
+    LLMAdapter, LLMResponse, LLMStreamEvent, ToolCall, GenerationOptions, ConfigError, LLMError,
     AnthropicAdapter, OpenAIAdapter, ErrorClass,
 )
 from .tools import (
@@ -22,6 +22,7 @@ from .history import HistoryManager, FileEventStore
 from .history.compactor import CompactionStrategy, HistoryCompactor, CompactionResult
 from .agents import (
     Agent, AgentConfig, LLMCallNode, ToolDispatchNode,
+    AgentStreamEvent,
     SkillContext, discover_skills, load_skills, load_project_context, build_system_prompt,
     MessageBus, TaskManager, MessageEnvelope, Task, TaskStatus,
 )
@@ -36,7 +37,7 @@ __all__ = [
     "ArtifactSpec", "ArtifactCheck", "ArtifactValidationResult", "ArtifactContract",
     "Workflow", "Step", "StepResult", "WorkflowResult",
     # Adapters
-    "LLMAdapter", "LLMResponse", "ToolCall", "GenerationOptions", "ConfigError", "LLMError",
+    "LLMAdapter", "LLMResponse", "LLMStreamEvent", "ToolCall", "GenerationOptions", "ConfigError", "LLMError",
     "AnthropicAdapter", "OpenAIAdapter", "ErrorClass",
     # Tools
     "Tool", "ToolRegistry", "ToolResponse", "SideEffectLevel", "BUILTIN_TOOLS",
@@ -46,7 +47,7 @@ __all__ = [
     # History
     "HistoryManager", "FileEventStore", "CompactionStrategy", "HistoryCompactor", "CompactionResult",
     # Agents
-    "Agent", "AgentConfig", "LLMCallNode", "ToolDispatchNode",
+    "Agent", "AgentConfig", "AgentStreamEvent", "LLMCallNode", "ToolDispatchNode",
     "SkillContext", "discover_skills", "load_skills", "load_project_context", "build_system_prompt",
     "MessageBus", "TaskManager", "MessageEnvelope", "Task", "TaskStatus",
 ]

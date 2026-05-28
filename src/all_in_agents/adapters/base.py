@@ -2,7 +2,7 @@ from abc import ABC, abstractmethod
 from dataclasses import dataclass, field, replace
 from enum import Enum
 import inspect
-from typing import Any
+from typing import Any, AsyncIterator
 
 
 @dataclass
@@ -19,6 +19,18 @@ class LLMResponse:
     input_tokens: int
     output_tokens: int
     stop_reason: str  # "end_turn" | "tool_use" | "max_tokens"
+
+
+@dataclass
+class LLMStreamEvent:
+    """Provider-neutral streaming event emitted by LLM adapters."""
+
+    type: str  # "text_delta" | "tool_call_delta" | "message"
+    delta: str = ""
+    tool_call: ToolCall | None = None
+    tool_call_delta: dict[str, Any] | None = None
+    response: LLMResponse | None = None
+    raw: Any = None
 
 
 @dataclass
@@ -112,6 +124,29 @@ class LLMAdapter(ABC):
         max_tokens: int = 2048,
         options: GenerationOptions | None = None,
     ) -> LLMResponse: ...
+
+    async def stream(
+        self,
+        messages: list[dict],
+        tools: list[dict] | None = None,
+        system: str = "",
+        max_tokens: int = 2048,
+        options: GenerationOptions | None = None,
+    ) -> AsyncIterator[LLMStreamEvent]:
+        """Stream a generation when supported, falling back to one full response."""
+
+        response = await self.generate(
+            messages=messages,
+            tools=tools,
+            system=system,
+            max_tokens=max_tokens,
+            options=options,
+        )
+        if response.content:
+            yield LLMStreamEvent(type="text_delta", delta=response.content)
+        for tool_call in response.tool_calls:
+            yield LLMStreamEvent(type="tool_call_delta", tool_call=tool_call)
+        yield LLMStreamEvent(type="message", response=response)
 
 
 async def close_async_client(client) -> None:

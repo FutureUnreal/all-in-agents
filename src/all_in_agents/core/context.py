@@ -1,7 +1,7 @@
 from __future__ import annotations
 
 from dataclasses import dataclass, field
-from typing import TYPE_CHECKING, Any
+from typing import TYPE_CHECKING, Any, Callable
 
 from .checkpoint import to_jsonable
 
@@ -25,6 +25,7 @@ class RunContext:
     store: "FileEventStore"
     system: str = ""
     compression_llm: "LLMAdapter | None" = None
+    stream_callback: Callable[[Any], Any] | None = None
     final_answer: str = ""
     state: dict[str, Any] = field(default_factory=dict)
 
