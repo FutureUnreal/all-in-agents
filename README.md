@@ -94,6 +94,49 @@ result = await agent.run(
 
 `initial_messages` is also supported by `run_sync(...)`, `stream(...)`, and `stream_text(...)`. Each message must contain `role` and `content`; `content` may be a string or a provider-neutral content block list.
 
+### Multimodal Input
+
+Text, image, and file input blocks are provider-neutral. The OpenAI Chat, OpenAI Responses, and Anthropic adapters convert them into the provider-specific request shape when the provider supports the block type.
+
+```python
+from all_in_agents import FileBase64Block, FileUrlBlock, ImageBase64Block, ImageUrlBlock, TextBlock
+
+result = await agent.run(
+    "Describe the image",
+    initial_messages=[{
+        "role": "user",
+        "content": [
+            TextBlock("Use this reference image."),
+            ImageUrlBlock("https://example.com/image.png", detail="low"),
+        ],
+    }],
+)
+
+result = await agent.run(
+    "Inspect this screenshot",
+    initial_messages=[{
+        "role": "user",
+        "content": [
+            TextBlock("What error is visible?"),
+            ImageBase64Block(encoded_png, media_type="image/png"),
+        ],
+    }],
+)
+
+result = await agent.run(
+    "Summarize the attached PDF",
+    initial_messages=[{
+        "role": "user",
+        "content": [
+            TextBlock("Use the PDF as source material."),
+            FileUrlBlock("https://example.com/report.pdf", filename="report.pdf"),
+        ],
+    }],
+)
+```
+
+Image and file blocks are currently input-only. Model-generated image/audio/file outputs are intentionally left to adapter-specific extensions for now. OpenAI Chat Completions supports `FileBase64Block` and `FileIdBlock`; use OpenAI Responses or Anthropic for `FileUrlBlock`.
+
 ### Turn Gates
 
 Use `on_turn` when callers need to inspect or control a completed model turn before tools run. The callback can be sync or async, so it can pause for human approval, policy checks, or an external evaluator.

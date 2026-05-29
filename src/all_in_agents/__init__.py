@@ -4,6 +4,8 @@ from .core import (
     Budget, BudgetLedger, BudgetExceededError, LoopDetectedError, ToolLimitExceededError,
     TraceEvent, RunTrace, TraceStore,
     ArtifactSpec, ArtifactCheck, ArtifactValidationResult, ArtifactContract,
+    TextBlock, ImageUrlBlock, ImageBase64Block, FileUrlBlock, FileBase64Block, FileIdBlock,
+    text_block, image_url_block, image_base64_block, file_url_block, file_base64_block, file_id_block,
     Workflow, Step, StepResult, WorkflowResult,
 )
 from .adapters import (
@@ -37,6 +39,8 @@ __all__ = [
     "Run", "RunResult", "RunStatus", "StopReason", "Budget", "BudgetLedger", "BudgetExceededError", "LoopDetectedError", "ToolLimitExceededError",
     "TraceEvent", "RunTrace", "TraceStore",
     "ArtifactSpec", "ArtifactCheck", "ArtifactValidationResult", "ArtifactContract",
+    "TextBlock", "ImageUrlBlock", "ImageBase64Block", "FileUrlBlock", "FileBase64Block", "FileIdBlock",
+    "text_block", "image_url_block", "image_base64_block", "file_url_block", "file_base64_block", "file_id_block",
     "Workflow", "Step", "StepResult", "WorkflowResult",
     # Adapters
     "LLMAdapter", "LLMResponse", "LLMStreamEvent", "ToolCall", "GenerationOptions", "ConfigError", "LLMError",

@@ -5,6 +5,7 @@ from dataclasses import dataclass, field
 from typing import TYPE_CHECKING, Any
 
 from .compactor import CompactionStrategy
+from ..core.content import normalize_content
 from ..core.tokens import estimate_message_tokens
 from ..utils import make_ulid as _make_ulid
 
@@ -76,6 +77,7 @@ class HistoryManager:
     def add(self, role: str, content: Any, *, turn_id: str | None = None) -> str:
         if turn_id is None:
             turn_id = _make_ulid()
+        content = normalize_content(content)
         self._messages.append({"role": role, "content": content, "_turn_id": turn_id})
         return turn_id
 

@@ -3,6 +3,8 @@ from __future__ import annotations
 import json
 from typing import Any
 
+from .content import is_file_block, is_image_block
+
 
 def estimate_text_tokens(value: Any) -> int:
     if value is None:
@@ -34,5 +36,14 @@ def estimate_content_tokens(content: Any) -> int:
     if isinstance(content, str):
         return estimate_text_tokens(content)
     if isinstance(content, list):
-        return sum(estimate_data_tokens(block) for block in content)
+        total = 0
+        for block in content:
+            if is_image_block(block):
+                detail = str(block.get("detail", "auto") or "auto")
+                total += {"low": 85, "high": 765}.get(detail, 512)
+            elif is_file_block(block):
+                total += 1024
+            else:
+                total += estimate_data_tokens(block)
+        return total
     return estimate_data_tokens(content)

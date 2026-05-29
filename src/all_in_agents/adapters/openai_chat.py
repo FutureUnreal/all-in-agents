@@ -3,6 +3,7 @@ from __future__ import annotations
 import json
 
 from .base import GenerationOptions, LLMResponse, LLMStreamEvent, ToolCall
+from ..core.content import image_url_for_provider, is_file_block, is_image_block
 from .openai_utils import get_attr, response_format_for_chat
 
 _STOP_REASON_MAP = {
@@ -41,13 +42,25 @@ def convert_chat_messages(messages: list[dict], system: str = "") -> list[dict]:
 
         if isinstance(content, list):
             if role == "user":
+                user_parts = []
                 for block in content:
-                    if isinstance(block, dict) and block.get("type") == "tool_result":
+                    if not isinstance(block, dict):
+                        continue
+                    if block.get("type") == "tool_result":
+                        if user_parts:
+                            result.append({"role": "user", "content": user_parts})
+                            user_parts = []
                         result.append({
                             "role": "tool",
                             "tool_call_id": block.get("tool_use_id", ""),
                             "content": block.get("content", ""),
                         })
+                    else:
+                        part = _chat_user_content_part(block)
+                        if part is not None:
+                            user_parts.append(part)
+                if user_parts:
+                    result.append({"role": "user", "content": user_parts})
                 continue
 
             if role == "assistant":
@@ -78,6 +91,43 @@ def convert_chat_messages(messages: list[dict], system: str = "") -> list[dict]:
         result.append({"role": role, "content": content or ""})
 
     return result
+
+
+def _chat_user_content_part(block: dict) -> dict | None:
+    btype = block.get("type")
+    if btype in ("text", "input_text"):
+        return {"type": "text", "text": str(block.get("text", ""))}
+    if is_image_block(block):
+        url = image_url_for_provider(block)
+        if not url:
+            return None
+        image_url: dict = {"url": url}
+        detail = block.get("detail")
+        if detail:
+            image_url["detail"] = detail
+        return {"type": "image_url", "image_url": image_url}
+    if is_file_block(block):
+        return _chat_file_content_part(block)
+    return None
+
+
+def _chat_file_content_part(block: dict) -> dict:
+    btype = block.get("type")
+    if btype == "file_url":
+        raise ValueError("OpenAI Chat Completions does not support file_url blocks; use file_base64/file_id or the Responses API")
+
+    file_payload: dict = {}
+    if btype == "file_base64":
+        file_payload["file_data"] = block.get("data", "")
+    elif btype == "file_id":
+        file_payload["file_id"] = block.get("file_id", "")
+    else:
+        file_payload.update(block.get("file", {}) if isinstance(block.get("file"), dict) else {})
+
+    filename = block.get("filename")
+    if filename:
+        file_payload["filename"] = filename
+    return {"type": "file", "file": file_payload}
 
 
 def build_chat_kwargs(

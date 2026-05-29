@@ -6,6 +6,8 @@ import json as _json
 from dataclasses import dataclass
 from typing import TYPE_CHECKING, Protocol
 
+from ..core.content import file_summary, image_summary, is_file_block, is_image_block
+
 if TYPE_CHECKING:
     from ..adapters.base import LLMAdapter
 
@@ -197,6 +199,10 @@ class HistoryCompactor:
                     parts.append(str(block.get("content", "")))
                 else:
                     parts.append(_tool_result_summary(block, tool_names_by_id))
+            elif is_image_block(block):
+                parts.append(image_summary(block))
+            elif is_file_block(block):
+                parts.append(file_summary(block))
             else:
                 parts.append(str(block.get("text", "") or block.get("content", "")))
         return " ".join(parts)

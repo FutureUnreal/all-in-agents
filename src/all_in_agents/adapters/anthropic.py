@@ -13,6 +13,7 @@ from .base import (
     ToolCall,
     close_async_client,
 )
+from ..core.content import image_url_for_provider, is_file_block, is_image_block
 
 _RETRYABLE_STATUS = {429, 500, 502, 503, 504}
 _STOP_REASON_MAP = {
@@ -84,7 +85,7 @@ class AnthropicAdapter(LLMAdapter):
                 try:
                     kwargs: dict = dict(
                         model=self.model_id,
-                        messages=messages,
+                        messages=self._convert_messages(messages),
                         max_tokens=max_tokens,
                     )
                     if system:
@@ -170,6 +171,70 @@ class AnthropicAdapter(LLMAdapter):
             "description": tool.get("description", ""),
             "input_schema": tool.get("input_schema", tool.get("parameters", {})),
         }
+
+    @staticmethod
+    def _convert_messages(messages: list[dict]) -> list[dict]:
+        converted = []
+        for msg in messages:
+            content = msg.get("content")
+            if isinstance(content, list):
+                content = [AnthropicAdapter._convert_content_block(block) for block in content]
+            converted.append({**msg, "content": content})
+        return converted
+
+    @staticmethod
+    def _convert_content_block(block):
+        if not isinstance(block, dict):
+            return block
+
+        btype = block.get("type")
+        if btype in ("text", "input_text"):
+            return {"type": "text", "text": str(block.get("text", ""))}
+        if btype == "image_url":
+            return {
+                "type": "image",
+                "source": {"type": "url", "url": image_url_for_provider(block)},
+            }
+        if btype == "image_base64":
+            return {
+                "type": "image",
+                "source": {
+                    "type": "base64",
+                    "media_type": block.get("media_type", "image/jpeg"),
+                    "data": block.get("data", ""),
+                },
+            }
+        if is_image_block(block):
+            return {
+                "type": "image",
+                "source": {"type": "url", "url": image_url_for_provider(block)},
+            }
+        if is_file_block(block):
+            return AnthropicAdapter._convert_file_block(block)
+        return block
+
+    @staticmethod
+    def _convert_file_block(block: dict) -> dict:
+        btype = block.get("type")
+        media_type = block.get("media_type", "application/pdf")
+        if btype == "file_url":
+            source = {"type": "url", "url": block.get("url", "")}
+        elif btype == "file_base64":
+            source = {
+                "type": "base64",
+                "media_type": media_type,
+                "data": block.get("data", ""),
+            }
+        elif btype == "file_id":
+            source = {"type": "file", "file_id": block.get("file_id", "")}
+        else:
+            source = {"type": "text", "media_type": media_type, "data": ""}
+
+        document = {"type": "document", "source": source}
+        filename = block.get("filename")
+        if filename:
+            document["title"] = filename
+        return document
 
     @staticmethod
     def _parse_response(resp) -> LLMResponse:

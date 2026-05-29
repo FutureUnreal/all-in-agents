@@ -5,6 +5,7 @@ from dataclasses import dataclass
 from typing import TYPE_CHECKING, Callable, Any, Iterable
 
 from ..core.context import RunContext
+from ..core.content import normalize_content
 from ..core.checkpoint import FlowCheckpoint, JsonCheckpointStore
 from ..core.errors import ErrorPolicy
 from ..core.flow import Flow, FlowHooks
@@ -51,9 +52,10 @@ def _normalize_initial_messages(messages: Iterable[dict[str, Any]] | None) -> li
             raise ValueError(f"initial_messages[{index}].role must be a non-empty string")
         if "content" not in msg:
             raise ValueError(f"initial_messages[{index}].content is required")
-        content = msg["content"]
-        if not isinstance(content, (str, list)):
-            raise TypeError(f"initial_messages[{index}].content must be a string or list")
+        try:
+            content = normalize_content(msg["content"])
+        except TypeError as e:
+            raise TypeError(f"initial_messages[{index}].content must be a string or list") from e
         normalized.append({"role": role, "content": content})
     return normalized
 

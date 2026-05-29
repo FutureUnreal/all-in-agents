@@ -3,6 +3,7 @@ from __future__ import annotations
 import json
 
 from .base import GenerationOptions, LLMResponse, LLMStreamEvent, ToolCall
+from ..core.content import image_url_for_provider, is_file_block, is_image_block
 from .openai_utils import get_attr, parse_json_object, response_format_for_responses
 
 
@@ -29,33 +30,71 @@ def convert_responses_input(messages: list[dict]) -> list[dict]:
             continue
 
         if isinstance(content, list):
-            text_parts = []
+            content_parts = []
             for block in content:
                 if not isinstance(block, dict):
                     continue
                 btype = block.get("type")
                 if btype == "text":
-                    text_parts.append(block.get("text", ""))
+                    content_parts.append({"type": "input_text", "text": block.get("text", "")})
+                elif btype == "input_text":
+                    content_parts.append({"type": "input_text", "text": block.get("text", "")})
+                elif is_image_block(block):
+                    url = image_url_for_provider(block)
+                    if url:
+                        image_part = {"type": "input_image", "image_url": url}
+                        detail = block.get("detail")
+                        if detail:
+                            image_part["detail"] = detail
+                        content_parts.append(image_part)
+                elif is_file_block(block):
+                    file_part = _responses_file_content_part(block)
+                    if file_part is not None:
+                        content_parts.append(file_part)
                 elif btype == "tool_result":
+                    if content_parts:
+                        result.append({"role": role, "content": content_parts})
+                        content_parts = []
                     result.append({
                         "type": "function_call_output",
                         "call_id": block.get("tool_use_id", ""),
                         "output": block.get("content", ""),
                     })
                 elif btype == "tool_use":
+                    if content_parts:
+                        result.append({"role": role, "content": content_parts})
+                        content_parts = []
                     result.append({
                         "type": "function_call",
                         "call_id": block.get("id", ""),
                         "name": block.get("name", ""),
                         "arguments": json.dumps(block.get("input", {})),
                     })
-            if text_parts:
-                result.append({"role": role, "content": " ".join(text_parts)})
+            if content_parts:
+                result.append({"role": role, "content": content_parts})
             continue
 
         result.append({"role": role, "content": content or ""})
 
     return result
+
+
+def _responses_file_content_part(block: dict) -> dict | None:
+    btype = block.get("type")
+    file_part = {"type": "input_file"}
+    if btype == "file_url":
+        file_part["file_url"] = block.get("url", "")
+    elif btype == "file_base64":
+        file_part["file_data"] = block.get("data", "")
+    elif btype == "file_id":
+        file_part["file_id"] = block.get("file_id", "")
+    else:
+        return None
+
+    filename = block.get("filename")
+    if filename:
+        file_part["filename"] = filename
+    return file_part
 
 
 def build_responses_kwargs(
