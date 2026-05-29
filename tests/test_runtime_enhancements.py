@@ -9,27 +9,33 @@ from all_in_agents import (
     AgentTurnDecision,
     BatchNode,
     BaseNode,
+    Budget,
     ConditionalNode,
     ErrorPolicy,
     FileEventStore,
     Flow,
     FlowHooks,
     JsonCheckpointStore,
+    KeywordToolSelector,
     LLMAdapter,
     LLMResponse,
     LLMStreamEvent,
     Node,
+    PromptBudgeter,
     RetryPolicy,
     Run,
     RunContext,
     SideEffectLevel,
+    StaticToolsSelector,
     SubFlowNode,
     Tool,
     ToolCall,
+    ToolPolicy,
     ToolRegistry,
     ToolResponse,
 )
 from all_in_agents import HistoryManager
+from all_in_agents.core.tokens import estimate_data_tokens, estimate_text_tokens
 from all_in_agents.history.compactor import CompactionResult
 
 
@@ -171,10 +177,12 @@ class RecordingLLM(LLMAdapter):
     def __init__(self):
         self.calls = 0
         self.messages = []
+        self.tools = []
 
     async def generate(self, messages, tools=None, system="", max_tokens=2048, options=None):
         self.calls += 1
         self.messages.append(messages)
+        self.tools.append(list(tools or []))
         return LLMResponse(
             content="done",
             tool_calls=[],
@@ -293,6 +301,10 @@ async def echo_tool(args, run):
     return ToolResponse("success", args["text"])
 
 
+async def noop_tool(args, run):
+    return ToolResponse("success", "ok")
+
+
 def make_registry():
     registry = ToolRegistry()
     registry.register(Tool(
@@ -305,6 +317,17 @@ def make_registry():
         },
         side_effect_level=SideEffectLevel.READ_ONLY,
         execute=echo_tool,
+    ))
+    return registry
+
+
+def add_noop_tool(registry, name, description="No-op"):
+    registry.register(Tool(
+        name=name,
+        description=description,
+        input_schema={"type": "object", "properties": {}},
+        side_effect_level=SideEffectLevel.READ_ONLY,
+        execute=noop_tool,
     ))
     return registry
 
@@ -442,6 +465,110 @@ class RuntimeEnhancementTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(parent.tool_calls, 1)
         self.assertEqual(parent.input_tokens_total, 3)
         self.assertEqual(parent.output_tokens_total, 5)
+
+    def test_budget_default_has_no_artificial_input_cap(self):
+        self.assertEqual(Budget().max_input_tokens_per_call, 0)
+
+    def test_prompt_budget_subtracts_static_overhead(self):
+        tools = [{
+            "name": "wide_tool",
+            "description": "x" * 400,
+            "input_schema": {
+                "type": "object",
+                "properties": {"query": {"type": "string", "description": "y" * 200}},
+            },
+        }]
+        allocation = PromptBudgeter(static_padding_tokens=0).allocate(
+            model_context_tokens=1000,
+            max_output_tokens=200,
+            max_input_tokens_per_call=500,
+            system="system prompt",
+            tools=tools,
+        )
+        expected_static = estimate_text_tokens("system prompt") + estimate_data_tokens(tools)
+
+        self.assertEqual(allocation.prompt_cap_tokens, 500)
+        self.assertEqual(allocation.static_tokens, expected_static)
+        self.assertEqual(allocation.history_tokens, 500 - expected_static)
+
+    async def test_agent_prompt_budget_trims_history_after_tool_overhead(self):
+        llm = RecordingLLM()
+        llm.max_context_tokens = 700
+        large_context = "old context " * 300
+        registry = make_registry()
+        registry.register(Tool(
+            name="wide_tool",
+            description="x" * 800,
+            input_schema={"type": "object", "properties": {"query": {"type": "string"}}},
+            side_effect_level=SideEffectLevel.READ_ONLY,
+            execute=echo_tool,
+        ))
+
+        with tempfile.TemporaryDirectory() as tmp:
+            agent = Agent(
+                llm,
+                registry,
+                run_dir=tmp,
+                budget=Budget(max_input_tokens_per_call=600, max_output_tokens_per_call=100),
+            )
+            await agent.run(
+                "current task",
+                initial_messages=[{"role": "user", "content": large_context}],
+            )
+
+        self.assertEqual(llm.messages[0][-1]["role"], "user")
+        self.assertNotIn("old context", llm.messages[0][-1]["content"])
+        self.assertLess(len(llm.messages[0][-1]["content"]), len(large_context))
+
+    def test_tool_registry_get_schemas_filters_names_and_policy(self):
+        registry = make_registry()
+        add_noop_tool(registry, "search")
+        add_noop_tool(registry, "write")
+        policy = ToolPolicy(tool_allowlist=frozenset({"echo", "search"}))
+
+        schemas = registry.get_schemas(
+            policy=policy,
+            names=["search", "missing", "echo", "search", "write"],
+        )
+
+        self.assertEqual([schema["name"] for schema in schemas], ["search", "echo"])
+
+    async def test_agent_static_tool_selector_limits_schemas_sent_to_llm(self):
+        llm = RecordingLLM()
+        registry = make_registry()
+        add_noop_tool(registry, "search")
+        add_noop_tool(registry, "write")
+
+        with tempfile.TemporaryDirectory() as tmp:
+            agent = Agent(
+                llm,
+                registry,
+                run_dir=tmp,
+                tool_selector=StaticToolsSelector(["search"]),
+            )
+            await agent.run("use search")
+
+        self.assertEqual([schema["name"] for schema in llm.tools[0]], ["search"])
+
+    async def test_agent_keyword_tool_selector_uses_goal_context(self):
+        llm = RecordingLLM()
+        registry = make_registry()
+        add_noop_tool(registry, "search")
+        add_noop_tool(registry, "write")
+
+        with tempfile.TemporaryDirectory() as tmp:
+            agent = Agent(
+                llm,
+                registry,
+                run_dir=tmp,
+                tool_selector=KeywordToolSelector(
+                    {"search": ["search"], "write": ["write"]},
+                    always_include=["echo"],
+                ),
+            )
+            await agent.run("please search the docs")
+
+        self.assertEqual([schema["name"] for schema in llm.tools[0]], ["echo", "search"])
 
     async def test_child_agent_consumes_parent_budget_ledger(self):
         parent = Run(run_id="parent", goal="parent")

@@ -5,6 +5,7 @@ from dataclasses import dataclass, field
 from typing import TYPE_CHECKING, Any
 
 from .compactor import CompactionStrategy
+from ..core.tokens import estimate_message_tokens
 from ..utils import make_ulid as _make_ulid
 
 if TYPE_CHECKING:
@@ -23,19 +24,6 @@ _SUMMARY_PROMPT = (
     '"facts" (list of strings), "decisions" (list of strings), "open_threads" (list of strings). '
     "Be concise. Output only valid JSON.\n\nHistory:\n{history}"
 )
-
-
-def _estimate_tokens(messages: list[dict]) -> int:
-    total = 0
-    for m in messages:
-        c = m.get("content", "")
-        if isinstance(c, str):
-            total += len(c) // 4
-        elif isinstance(c, list):
-            for block in c:
-                if isinstance(block, dict):
-                    total += len(str(block.get("text", "") or block.get("content", ""))) // 4
-    return total
 
 
 def _strip_internal(msg: dict) -> dict:
@@ -119,9 +107,9 @@ class HistoryManager:
 
     def get_messages(self, max_tokens: int | None = None) -> list[dict]:
         msgs = self._build_context()
-        effective_max = max_tokens or self.max_context_tokens
+        effective_max = self.max_context_tokens if max_tokens is None else max(0, max_tokens)
 
-        if _estimate_tokens(msgs) <= effective_max:
+        if estimate_message_tokens(msgs) <= effective_max:
             return msgs
 
         # Group into turns and drop oldest whole turns until within budget
@@ -133,13 +121,13 @@ class HistoryManager:
             live_msgs = msgs[2:]
 
         turns = _group_by_turn(live_msgs)
-        while len(turns) > 1 and _estimate_tokens(preamble + [m for t in turns for m in t]) > effective_max:
+        while len(turns) > 1 and estimate_message_tokens(preamble + [m for t in turns for m in t]) > effective_max:
             turns.pop(0)
 
         result = preamble + [m for t in turns for m in t]
 
         # Last-resort: truncate sole remaining message
-        if result and _estimate_tokens(result) > effective_max:
+        if result and estimate_message_tokens(result) > effective_max:
             msg = result[-1]
             if isinstance(msg.get("content"), str):
                 max_chars = effective_max * 4
@@ -148,7 +136,7 @@ class HistoryManager:
         return result
 
     def needs_compression(self) -> bool:
-        return _estimate_tokens(self._messages) > self._compress_threshold
+        return estimate_message_tokens(self._messages) > self._compress_threshold
 
     async def _compact_with_strategy(
         self,

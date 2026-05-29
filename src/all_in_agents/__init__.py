@@ -23,6 +23,8 @@ from .history.compactor import CompactionStrategy, HistoryCompactor, CompactionR
 from .agents import (
     Agent, AgentConfig, LLMCallNode, ToolDispatchNode,
     AgentTurn, AgentTurnDecision, AgentStreamEvent,
+    PromptBudget, PromptBudgeter,
+    ToolSelector, ToolSelectionContext, AllToolsSelector, StaticToolsSelector, KeywordToolSelector,
     SkillContext, discover_skills, load_skills, load_project_context, build_system_prompt,
     MessageBus, TaskManager, MessageEnvelope, Task, TaskStatus,
 )
@@ -48,7 +50,8 @@ __all__ = [
     "HistoryManager", "FileEventStore", "CompactionStrategy", "HistoryCompactor", "CompactionResult",
     # Agents
     "Agent", "AgentConfig", "AgentTurn", "AgentTurnDecision",
-    "AgentStreamEvent", "LLMCallNode", "ToolDispatchNode",
+    "AgentStreamEvent", "LLMCallNode", "ToolDispatchNode", "PromptBudget", "PromptBudgeter",
+    "ToolSelector", "ToolSelectionContext", "AllToolsSelector", "StaticToolsSelector", "KeywordToolSelector",
     "SkillContext", "discover_skills", "load_skills", "load_project_context", "build_system_prompt",
     "MessageBus", "TaskManager", "MessageEnvelope", "Task", "TaskStatus",
 ]

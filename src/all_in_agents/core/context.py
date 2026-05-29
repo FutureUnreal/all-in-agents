@@ -25,6 +25,8 @@ class RunContext:
     store: "FileEventStore"
     system: str = ""
     compression_llm: "LLMAdapter | None" = None
+    prompt_budgeter: Any = None
+    tool_selector: Any = None
     stream_callback: Callable[[Any], Any] | None = None
     on_turn: Callable[[Any], Any] | None = None
     turn_max_retries: int = 3

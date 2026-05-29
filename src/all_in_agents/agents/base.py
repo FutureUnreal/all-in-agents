@@ -18,6 +18,8 @@ from ..tools.policy import ToolPolicy
 from ..history.compactor import CompactionStrategy
 from ..agents.harness import build_system_prompt
 from ..agents.nodes import LLMCallNode, ToolDispatchNode
+from ..agents.prompt_budget import PromptBudgeter
+from ..agents.tool_selection import AllToolsSelector, ToolSelector
 from ..agents.streaming import AgentStreamEvent, AgentStreamingMixin, trace_event_to_stream_event
 from ..utils import make_ulid as _make_ulid, iso_now as _iso_now
 
@@ -67,6 +69,8 @@ class AgentConfig:
     history_compactor: CompactionStrategy | None = None
     history_compress_threshold_tokens: int = -1
     compression_llm: Any = None
+    prompt_budgeter: Any = None
+    tool_selector: Any = None
     artifact_contract: ArtifactContract | None = None
     on_tool_result: Callable[[dict], Any] | None = None
     on_event: Callable[[dict], Any] | None = None
@@ -99,6 +103,8 @@ class Agent(AgentStreamingMixin):
         history_compactor: CompactionStrategy | None = None,
         history_compress_threshold_tokens: int = -1,
         compression_llm: "LLMAdapter | None" = None,
+        prompt_budgeter: PromptBudgeter | None = None,
+        tool_selector: ToolSelector | Callable[[list[dict], Any], Any] | None = None,
         artifact_contract: ArtifactContract | None = None,
         on_tool_result: Callable[[dict], Any] | None = None,
         on_event: Callable[[dict], Any] | None = None,
@@ -128,6 +134,8 @@ class Agent(AgentStreamingMixin):
                 else config.history_compress_threshold_tokens
             )
             compression_llm = compression_llm if compression_llm is not None else config.compression_llm
+            prompt_budgeter = prompt_budgeter if prompt_budgeter is not None else config.prompt_budgeter
+            tool_selector = tool_selector if tool_selector is not None else config.tool_selector
             artifact_contract = artifact_contract if artifact_contract is not None else config.artifact_contract
             on_tool_result = on_tool_result if on_tool_result is not None else config.on_tool_result
             on_event = on_event if on_event is not None else config.on_event
@@ -161,6 +169,8 @@ class Agent(AgentStreamingMixin):
         self._history_compactor = history_compactor
         self._history_compress_threshold_tokens = history_compress_threshold_tokens
         self._compression_llm = compression_llm
+        self._prompt_budgeter = prompt_budgeter or PromptBudgeter()
+        self._tool_selector = tool_selector or AllToolsSelector()
         self._artifact_contract = artifact_contract
         self._on_tool_result = on_tool_result
         self._on_event = on_event
@@ -392,6 +402,8 @@ class Agent(AgentStreamingMixin):
             store=store,
             system=system,
             compression_llm=self._compression_llm,
+            prompt_budgeter=self._prompt_budgeter,
+            tool_selector=self._tool_selector,
             stream_callback=stream_callback,
             on_turn=self._on_turn,
             turn_max_retries=self._turn_max_retries,

@@ -27,7 +27,7 @@ class Budget:
     max_llm_calls: int = 40
     max_tool_calls: int = 80
     max_wall_ms: int = 1_800_000
-    max_input_tokens_per_call: int = 24_000
+    max_input_tokens_per_call: int = 0
     max_output_tokens_per_call: int = 2_048
     loop_same_action_limit: int = 3
 

@@ -204,11 +204,14 @@ budget = Budget(
     max_llm_calls=40,
     max_tool_calls=80,
     max_wall_ms=1_800_000,       # 30 min wall-clock limit
+    max_input_tokens_per_call=0,  # 0 = no artificial input cap; use model context window
     loop_same_action_limit=3,    # raise LoopDetectedError after 3 consecutive identical tool calls
 )
 
 agent = Agent(llm=llm, tools=tools, budget=budget)
 ```
+
+Before each LLM call, the agent computes a prompt budget from the model context window, output reserve, system prompt, and active tool schemas. Only the remaining budget is given to history trimming. If `max_input_tokens_per_call` is set, it acts as a full prompt hard cap rather than a history-only cap.
 
 ### Artifact Contracts
 
@@ -286,6 +289,32 @@ registry.register(Tool(
 ```
 
 `DANGEROUS` and `WRITES_LOCAL` tools call `approval_callback` before executing. By default, the callback denies all requests (safe by default). Use `unsafe_defaults()` for development or provide your own callback. Install `jsonschema` for automatic argument validation with type coercion.
+
+### Tool Selection
+
+By default every visible tool schema is sent to the model. For large registries, pass a selector so each LLM call only exposes the tools that are relevant for that turn. `ToolPolicy` still applies after selection.
+
+```python
+from all_in_agents import Agent, KeywordToolSelector, StaticToolsSelector
+
+agent = Agent(
+    llm=llm,
+    tools=registry,
+    tool_selector=StaticToolsSelector(["read_file", "text_search"]),
+)
+
+research_agent = Agent(
+    llm=llm,
+    tools=registry,
+    tool_selector=KeywordToolSelector(
+        {
+            "search": ["text_search"],
+            "file": ["read_file", "write_file"],
+        },
+        always_include=["read_file"],
+    ),
+)
+```
 
 ### MCP Tools
 

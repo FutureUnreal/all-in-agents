@@ -1,6 +1,6 @@
 import asyncio
 from dataclasses import dataclass
-from typing import Awaitable, Callable
+from typing import Awaitable, Callable, Iterable
 
 try:
     import jsonschema
@@ -76,11 +76,37 @@ class ToolRegistry:
                 return t
         return None
 
-    def get_schemas(self, policy: ToolPolicy | None = None) -> list[dict]:
+    def _is_visible(self, tool: Tool, policy: ToolPolicy | None = None) -> bool:
         effective_policy = policy or self._policy
-        if effective_policy is not None:
-            return [_to_schema(t) for t in self._tools.values() if effective_policy.is_tool_visible(t.qualified_name)]
-        return [_to_schema(t) for t in self._tools.values()]
+        return effective_policy is None or effective_policy.is_tool_visible(tool.qualified_name)
+
+    def list_tool_names(self, policy: ToolPolicy | None = None) -> list[str]:
+        return [tool.qualified_name for tool in self._tools.values() if self._is_visible(tool, policy)]
+
+    def get_schemas(
+        self,
+        policy: ToolPolicy | None = None,
+        names: Iterable[str] | None = None,
+    ) -> list[dict]:
+        if names is None:
+            return [_to_schema(t) for t in self._tools.values() if self._is_visible(t, policy)]
+
+        schemas: list[dict] = []
+        seen_names: set[str] = set()
+        seen_tools: set[str] = set()
+        for name in names:
+            if name in seen_names:
+                continue
+            seen_names.add(name)
+            tool = self.get_tool(name)
+            if (
+                tool is not None
+                and tool.qualified_name not in seen_tools
+                and self._is_visible(tool, policy)
+            ):
+                seen_tools.add(tool.qualified_name)
+                schemas.append(_to_schema(tool))
+        return schemas
 
     async def execute(self, name: str, args: dict, run: Run, *, policy: ToolPolicy | None = None) -> ToolResponse:
         tool = self.get_tool(name)

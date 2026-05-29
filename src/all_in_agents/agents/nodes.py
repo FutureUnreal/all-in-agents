@@ -7,6 +7,8 @@ from typing import TYPE_CHECKING, Any, Callable
 
 from ..core.context import NodeContext
 from ..core.node import BaseNode
+from .prompt_budget import PromptBudgeter
+from .tool_selection import AllToolsSelector, ToolSelectionContext
 from ..utils import make_ulid as _make_ulid
 
 if TYPE_CHECKING:
@@ -60,6 +62,31 @@ def _tool_sig(name: str, args: dict) -> str:
 
 _TURN_RETRY_COUNT_KEY = "_agent_turn_retry_count"
 _TURN_RETRY_REASON = "turn_retry_exhausted"
+
+
+async def _select_active_tools(ctx: NodeContext, messages: list[dict]) -> list[dict]:
+    available_tools = ctx.tools.get_schemas(policy=ctx.run.tool_policy)
+    selector = ctx.run_context.tool_selector or AllToolsSelector()
+    selection_context = ToolSelectionContext(
+        goal=ctx.run.goal,
+        step_index=ctx.step_index,
+        messages=messages,
+        system=ctx.system,
+        state=ctx.state,
+    )
+
+    if hasattr(selector, "select_tools"):
+        selected_names = selector.select_tools(available_tools, selection_context)
+    elif callable(selector):
+        selected_names = selector(available_tools, selection_context)
+    else:
+        raise TypeError("tool_selector must implement select_tools(...) or be callable")
+
+    if asyncio.iscoroutine(selected_names):
+        selected_names = await selected_names
+    if selected_names is None:
+        return available_tools
+    return ctx.tools.get_schemas(policy=ctx.run.tool_policy, names=selected_names)
 
 
 async def _apply_turn_gate(
@@ -163,16 +190,24 @@ async def _apply_turn_gate(
 
 class LLMCallNode(BaseNode):
     async def prep(self, ctx: NodeContext) -> dict:
-        max_tokens = None
-        if ctx.run.budget.max_input_tokens_per_call > 0:
-            max_tokens = min(ctx.llm.max_context_tokens, ctx.run.budget.max_input_tokens_per_call)
         max_output_tokens = ctx.run.budget.max_output_tokens_per_call
         if max_output_tokens <= 0:
             max_output_tokens = 2048
+        selection_messages = ctx.history.get_messages()
+        tools = await _select_active_tools(ctx, selection_messages)
+        prompt_budgeter = ctx.run_context.prompt_budgeter or PromptBudgeter()
+        prompt_budget = prompt_budgeter.allocate(
+            model_context_tokens=ctx.llm.max_context_tokens,
+            max_output_tokens=max_output_tokens,
+            max_input_tokens_per_call=ctx.run.budget.max_input_tokens_per_call,
+            system=ctx.system,
+            tools=tools,
+        )
         return {
-            "messages": ctx.history.get_messages(max_tokens=max_tokens),
-            "tools": ctx.tools.get_schemas(policy=ctx.run.tool_policy),
+            "messages": ctx.history.get_messages(max_tokens=prompt_budget.history_tokens),
+            "tools": tools,
             "max_output_tokens": max_output_tokens,
+            "prompt_budget": prompt_budget.to_dict(),
         }
 
     async def exec(self, prep: dict, ctx: NodeContext) -> "LLMResponse":
@@ -188,6 +223,7 @@ class LLMCallNode(BaseNode):
         await _emit_stream_event(ctx, "llm_started", {
             "max_tokens": prep["max_output_tokens"],
             "tool_names": [tool.get("name", "") for tool in prep["tools"]],
+            "prompt_budget": prep.get("prompt_budget", {}),
         })
 
         final_response = None
