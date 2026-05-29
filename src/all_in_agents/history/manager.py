@@ -97,9 +97,12 @@ class HistoryManager:
     ) -> str:
         if turn_id is None:
             turn_id = _make_ulid()
+        block = {"type": "tool_result", "tool_use_id": tool_use_id, "content": result.content}
+        if result.status == "error":
+            block["is_error"] = True
         self._messages.append({
             "role": "user",
-            "content": [{"type": "tool_result", "tool_use_id": tool_use_id, "content": result.content}],
+            "content": [block],
             "_source": "tool_result",
             "_turn_id": turn_id,
         })
